@@ -1,0 +1,37 @@
+====================================================================
+           HƯỚNG DẪN CHẠY DỰ ÁN TRÊN MACBOOK VÀ WINDOWS
+====================================================================
+
+1. YÊU CẦU DUY NHẤT:
+   - Máy tính cần cài sẵn Node.js (khuyên dùng bản LTS): https://nodejs.org
+
+--------------------------------------------------------------------
+2. CÁCH CHẠY TRÊN WINDOWS:
+--------------------------------------------------------------------
+   Cách 1 (Chạy Web App + Backend):
+     👉 Bấm đúp chuột vào file: [ start_windows.bat ]
+     - Hệ thống sẽ tự động cài đặt thư viện và mở trình duyệt: http://localhost:3001
+
+   Cách 2 (Chạy dưới dạng App Desktop Electron):
+     👉 Bấm đúp chuột vào file: [ start_desktop_windows.bat ]
+
+--------------------------------------------------------------------
+3. CÁCH CHẠY TRÊN MACBOOK:
+--------------------------------------------------------------------
+   Cách 1 (Chạy Web App + Backend):
+     👉 Bấm đúp chuột vào file: [ start_mac.command ]
+     - Hệ thống sẽ tự động khởi chạy và mở trình duyệt: http://localhost:3001
+     * Lưu ý: Nếu macOS báo "App can't be opened...", hãy click chuột phải vào file -> chọn "Open".
+
+   Cách 2 (Chạy dưới dạng App Desktop Electron):
+     👉 Bấm đúp chuột vào file: [ start_desktop_mac.command ]
+
+--------------------------------------------------------------------
+4. CÁC ĐƯỜNG DẪN QUAN TRỌNG:
+--------------------------------------------------------------------
+   - Giao diện người dùng: http://localhost:3001
+   - Giao diện Admin quản trị: http://localhost:3001/admin
+     + Mã PIN mặc định: 8888
+     + Tại đây bạn có thể cấu hình Telegram Bot Token, Tên nhóm, Target Bot...
+   - Cấu hình file tĩnh: config.json và signals.json
+====================================================================

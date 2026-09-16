@@ -1,0 +1,56 @@
+{
+  "name": "react-app",
+  "productName": "FinAI Signals",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "server": "node cron-service.js",
+    "cron": "node cron-service.js",
+    "test:cron": "node test-cron-simulator.js",
+    "start:all": "concurrently -k \"node cron-service.js\" \"vite\"",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "electron:start": "cross-env NODE_ENV=development concurrently -k \"node scripts/start-backend-if-needed.js\" \"node scripts/start-vite-if-needed.js\" \"wait-on tcp:3001 tcp:5173 && node scripts/launch-electron.js\"",
+    "electron:build": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3",
+    "oxlint": "^1.79.0",
+    "vite": "^8.2.2",
+    "wait-on": "^9.1.0"
+  },
+  "build": {
+    "appId": "com.finai.signals",
+    "productName": "FinAI Signals",
+    "icon": "build/icon",
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "cron-service.js",
+      "config.json",
+      "signals.json",
+      "public/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist_electron"
+    },
+    "mac": {
+      "category": "public.app-category.finance"
+    }
+  }
+}

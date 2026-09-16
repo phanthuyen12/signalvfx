@@ -1,0 +1,18 @@
+directories:
+  output: dist_electron
+  buildResources: build
+appId: com.finai.signals
+productName: FinAI Signals
+icon: build/icon
+files:
+  - filter:
+      - dist/**/*
+      - main.cjs
+      - cron-service.js
+      - config.json
+      - signals.json
+      - public/**/*
+      - package.json
+mac:
+  category: public.app-category.finance
+electronVersion: 44.0.0

@@ -1,0 +1,13 @@
+{
+  "port": 3001,
+  "host": "0.0.0.0",
+  "botToken": "8961242806:AAENZ5nB0f0wzDiFZXHyKEk0EAEB52jJ7Jc",
+  "targetBotUsername": "Gannfinbot",
+  "targetGroupName": "thuyendev",
+  "chatId": "-1003865919412",
+  "adminPin": "8888",
+  "enableCron": true,
+  "cronIntervalSeconds": 3,
+  "autoPoll": false,
+  "pollInterval": 3000
+}
