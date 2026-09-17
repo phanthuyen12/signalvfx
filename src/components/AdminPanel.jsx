@@ -22,7 +22,10 @@ import { splitMessages, parseTelegramMessage } from '../utils/telegramParser';
 function getApiBaseUrl() {
   if (typeof window === 'undefined') return import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-  const { hostname, protocol } = window.location;
+  const { hostname, protocol, port } = window.location;
+  if (port === '5173') return '';
+  if (protocol === 'file:') return import.meta.env.VITE_API_URL || 'http://127.0.0.1:3001';
+
   const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
 
   if (!isLocalhost) return '';
