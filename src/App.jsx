@@ -19,8 +19,13 @@ function getApiBaseUrl() {
 
 const API_BASE_URL = getApiBaseUrl();
 
+function isElectronRuntime() {
+  return typeof window !== 'undefined' && Boolean(window.process?.versions?.electron);
+}
+
 function getCurrentRoute() {
   if (typeof window === 'undefined') return '/admin';
+  if (isElectronRuntime()) return '/live';
 
   const hashPath = window.location.hash.replace(/^#/, '');
   if (hashPath === '/live' || hashPath === '/client') return '/live';
@@ -35,6 +40,7 @@ function App() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [lastSync, setLastSync] = useState(new Date().toLocaleTimeString('en-US'));
   const [pathname, setPathname] = useState(getCurrentRoute);
+  const isElectron = isElectronRuntime();
 
   const navigateTo = (path) => {
     if (window.location.protocol === 'file:') {
@@ -149,7 +155,11 @@ function App() {
 
   const appHeader = (
     <header className="finai-app-header">
-      <button className="brand-lockup" onClick={() => navigateTo('/admin')} title="FinAI Signals">
+      <button
+        className="brand-lockup"
+        onClick={() => navigateTo(isElectron ? '/live' : '/admin')}
+        title="FinAI Signals"
+      >
         <img src={logoUrl} alt="FinAI Signals" className="brand-logo-mark" />
         <span className="brand-copy">
           <strong>FinAI</strong>
@@ -158,12 +168,14 @@ function App() {
       </button>
 
       <nav className="app-mode-switch" aria-label="Mode Switch">
-        <button
-          className={`app-mode-btn ${isAdminRoute ? 'active' : ''}`}
-          onClick={() => navigateTo('/admin')}
-        >
-          Admin Portal
-        </button>
+        {!isElectron && (
+          <button
+            className={`app-mode-btn ${isAdminRoute ? 'active' : ''}`}
+            onClick={() => navigateTo('/admin')}
+          >
+            Admin Portal
+          </button>
+        )}
         <button
           className={`app-mode-btn ${!isAdminRoute ? 'active' : ''}`}
           onClick={() => navigateTo('/live')}
