@@ -12,6 +12,7 @@ import {
 import {
   getBotMe,
   getTelegramWebhookInfo,
+  setTelegramWebhook,
   deleteTelegramWebhook,
   sendTelegramMessage,
   inspectRecentUpdates
@@ -97,6 +98,8 @@ export default function AdminPanel({ signals, onDataChange }) {
   // Bot Diagnostics & Testing States
   const [diagResult, setDiagResult] = useState(null);
   const [diagLoading, setDiagLoading] = useState(false);
+  const [autoFixLoading, setAutoFixLoading] = useState(false);
+  const [hidePrivacyWarning, setHidePrivacyWarning] = useState(false);
   const [clearWebhookLoading, setClearWebhookLoading] = useState(false);
   const [inspectedUpdates, setInspectedUpdates] = useState([]);
   const [inspectLoading, setInspectLoading] = useState(false);
@@ -106,18 +109,38 @@ export default function AdminPanel({ signals, onDataChange }) {
   const [testSendMessage, setTestSendMessage] = useState('');
   const [testSendLoading, setTestSendLoading] = useState(false);
 
+  // Custom Webhook & Auto Tunnel Management State
+  const [customWebhookUrl, setCustomWebhookUrl] = useState('');
+  const [webhookInfoResult, setWebhookInfoResult] = useState(null);
+  const [webhookActionLoading, setWebhookActionLoading] = useState(false);
+  const [tunnelStatus, setTunnelStatus] = useState({ active: false, tunnelUrl: '', webhookUrl: '' });
+  const [autoTunnelLoading, setAutoTunnelLoading] = useState(false);
+
   useEffect(() => {
     const loadBackendConfig = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/admin/config`);
-        if (!res.ok) return;
-
-        const backendConfig = await res.json();
-        setBotConfig(prev => ({ ...prev, ...backendConfig }));
-        setIsPolling(Boolean(backendConfig.enableCron && backendConfig.botToken));
-        if (backendConfig.chatId && !testSendChatId) {
-          setTestSendChatId(backendConfig.chatId);
+        if (res.ok) {
+          const backendConfig = await res.json();
+          setBotConfig(prev => ({ ...prev, ...backendConfig }));
+          setIsPolling(Boolean(backendConfig.enableCron && backendConfig.botToken));
+          if (backendConfig.chatId && !testSendChatId) {
+            setTestSendChatId(backendConfig.chatId);
+          }
+          if (backendConfig.webhookUrl) {
+            setCustomWebhookUrl(backendConfig.webhookUrl);
+          }
         }
+
+        // Kiểm tra trạng thái Auto Tunnel nếu backend đang chạy
+        try {
+          const tunnelRes = await fetch(`${API_BASE_URL}/api/admin/bot/tunnel-status`);
+          if (tunnelRes.ok) {
+            const tData = await tunnelRes.json();
+            setTunnelStatus(tData);
+            if (tData.webhookUrl) setCustomWebhookUrl(tData.webhookUrl);
+          }
+        } catch (e) {}
       } catch (err) {
         setBotLogs(prev => [
           `[${new Date().toLocaleTimeString()}] ⚠️ Chưa kết nối được backend 3001, app sẽ chỉ dùng dữ liệu local.`,
@@ -128,6 +151,144 @@ export default function AdminPanel({ signals, onDataChange }) {
 
     loadBackendConfig();
   }, []);
+
+  // 1-Click Tự Động Tạo HTTPS Tunnel & Đăng Ký Webhook
+  const handleStartAutoTunnel = async () => {
+    if (!botConfig.botToken) {
+      alert('Vui lòng nhập Telegram Bot Token trước khi tạo Tunnel!');
+      return;
+    }
+    setAutoTunnelLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/bot/auto-tunnel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botToken: botConfig.botToken })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Lỗi tạo tunnel');
+
+      setTunnelStatus({ active: true, tunnelUrl: data.tunnelUrl, webhookUrl: data.webhookUrl });
+      setCustomWebhookUrl(data.webhookUrl);
+      showFeedback(`⚡️ ${data.message}`);
+      setBotLogs(prev => [
+        `[${new Date().toLocaleTimeString()}] 🌐 Đã mở HTTPS Tunnel: ${data.tunnelUrl}`,
+        `[${new Date().toLocaleTimeString()}] ⚡️ Đã tự động đăng ký Webhook Telegram: ${data.webhookUrl}`,
+        ...prev
+      ]);
+      handleCheckWebhookInfo();
+      handleRunBotDiagnosis();
+    } catch (err) {
+      alert('Lỗi tạo Auto Tunnel: ' + err.message);
+    } finally {
+      setAutoTunnelLoading(false);
+    }
+  };
+
+  // Đóng Tunnel và quay về Polling
+  const handleStopAutoTunnel = async () => {
+    setAutoTunnelLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/admin/bot/stop-tunnel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botToken: botConfig.botToken })
+      });
+      const data = await res.json();
+      setTunnelStatus({ active: false, tunnelUrl: '', webhookUrl: '' });
+      showFeedback('⏹ Đã đóng Tunnel và chuyển về chế độ Long-Polling!');
+      setBotLogs(prev => [`[${new Date().toLocaleTimeString()}] ⏹ Đã đóng Tunnel & xóa Webhook Telegram.`, ...prev]);
+      handleCheckWebhookInfo();
+      handleRunBotDiagnosis();
+    } catch (err) {
+      alert('Lỗi đóng Tunnel: ' + err.message);
+    } finally {
+      setAutoTunnelLoading(false);
+    }
+  };
+
+  // Đăng ký Webhook tùy chỉnh 100%
+  const handleRegisterCustomWebhook = async (dropPending = false) => {
+    if (!botConfig.botToken) {
+      alert('Vui lòng nhập Telegram Bot Token!');
+      return;
+    }
+    const targetUrl = customWebhookUrl.trim();
+    if (!targetUrl || !targetUrl.startsWith('https://')) {
+      alert('Vui lòng nhập Webhook URL hợp lệ bắt đầu bằng https://\n(Ví dụ: https://your-domain.com/api/webhook hoặc https://xxx.ngrok-free.app/api/webhook)');
+      return;
+    }
+
+    setWebhookActionLoading(true);
+    try {
+      let resData = null;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/admin/bot/set-webhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ botToken: botConfig.botToken, url: targetUrl, dropPendingUpdates: dropPending })
+        });
+        if (res.ok) resData = await res.json();
+      } catch (e) {}
+
+      if (!resData) {
+        const ok = await setTelegramWebhook(botConfig.botToken, targetUrl, dropPending);
+        resData = { success: ok, message: 'Đăng ký Webhook thành công!' };
+      }
+
+      showFeedback(`🌐 Đã đăng ký Webhook Telegram thành công tới: ${targetUrl}`);
+      setBotLogs(prev => [`[${new Date().toLocaleTimeString()}] 🌐 Đã đăng ký Webhook: ${targetUrl}`, ...prev]);
+
+      const nextConfig = { ...botConfig, webhookUrl: targetUrl };
+      setBotConfig(nextConfig);
+      try { await saveBotConfigToBackend(nextConfig); } catch (e) {}
+
+      handleCheckWebhookInfo();
+      handleRunBotDiagnosis();
+    } catch (err) {
+      alert('Lỗi đăng ký Webhook: ' + err.message);
+    } finally {
+      setWebhookActionLoading(false);
+    }
+  };
+
+  // Kiểm tra chi tiết Webhook Info
+  const handleCheckWebhookInfo = async () => {
+    if (!botConfig.botToken) {
+      alert('Vui lòng nhập Telegram Bot Token!');
+      return;
+    }
+    setWebhookActionLoading(true);
+    try {
+      const hookInfo = await getTelegramWebhookInfo(botConfig.botToken);
+      setWebhookInfoResult(hookInfo);
+      if (hookInfo && hookInfo.url) {
+        setCustomWebhookUrl(hookInfo.url);
+        showFeedback(`🌐 Webhook đang hoạt động tại: ${hookInfo.url}`);
+      } else {
+        showFeedback('🌐 Webhook hiện đang TẮT (Chế độ Long-Polling sẵn sàng).');
+      }
+    } catch (err) {
+      alert('Lỗi kiểm tra Webhook: ' + err.message);
+    } finally {
+      setWebhookActionLoading(false);
+    }
+  };
+
+  // Tự động điền URL Webhook mẫu
+  const handleFillOriginWebhook = () => {
+    if (typeof window !== 'undefined') {
+      const currentHost = window.location.host;
+      const isLocal = currentHost.includes('localhost') || currentHost.includes('127.0.0.1');
+      if (isLocal) {
+        setCustomWebhookUrl('https://your-ngrok-domain.ngrok-free.app/api/webhook');
+        showFeedback('💡 Đã điền URL mẫu Ngrok (Hãy thay bằng domain ngrok thật của bạn)');
+      } else {
+        setCustomWebhookUrl(`https://${currentHost}/api/webhook`);
+        showFeedback(`💡 Đã điền URL webhook theo domain hiện tại: https://${currentHost}/api/webhook`);
+      }
+    }
+  };
 
   const saveBotConfigToBackend = async (nextConfig) => {
     saveBotConfig(nextConfig);
@@ -151,7 +312,85 @@ export default function AdminPanel({ signals, onDataChange }) {
     setTimeout(() => setSuccessMsg(''), 3500);
   };
 
-  // 1. Chẩn đoán kết nối Bot (Health Check / getMe / getWebhookInfo)
+  // 1. 1-CLICK TỰ ĐỘNG BẬT / TẮT KẾT NỐI NHẬN TÍN HIỆU
+  const handleToggleAutoConnect = async () => {
+    if (!botConfig.botToken) {
+      alert('Vui lòng nhập Telegram Bot Token!');
+      return;
+    }
+    const nextState = !isPolling;
+    try {
+      if (nextState) {
+        // Tự động giải phóng webhook cũ để sẵn sàng nhận tin realtime
+        await fetch(`${API_BASE_URL}/api/admin/bot/clear-webhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ botToken: botConfig.botToken, dropPendingUpdates: false })
+        }).catch(() => {});
+      }
+      const updated = { ...botConfig, enableCron: nextState };
+      setBotConfig(updated);
+      setIsPolling(nextState);
+      await saveBotConfigToBackend(updated).catch(() => {});
+      showFeedback(nextState ? '🟢 ĐÃ BẬT TỰ ĐỘNG NHẬN TÍN HIỆU TELEGRAM REALTIME!' : '⏹ Đã tạm dừng nhận tin nhắn.');
+      setBotLogs(prev => [
+        `[${new Date().toLocaleTimeString()}] ${nextState ? '🟢 Đã kích hoạt kết nối nhận tín hiệu Realtime.' : '⏹ Đã dừng kết nối nhận tin.'}`,
+        ...prev
+      ]);
+    } catch (err) {
+      alert('Lỗi: ' + err.message);
+    }
+  };
+
+  // 2. 1-CLICK TỰ ĐỘNG SỬA LỖI & RESET XUNG ĐỘT (FIX CONFLICT)
+  const handleAutoFixBot = async () => {
+    if (!botConfig.botToken) {
+      alert('Vui lòng nhập Telegram Bot Token trước khi sửa lỗi!');
+      return;
+    }
+    setAutoFixLoading(true);
+    try {
+      let result = null;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/admin/bot/auto-fix`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ botToken: botConfig.botToken })
+        });
+        if (res.ok) {
+          result = await res.json();
+        }
+      } catch (e) {}
+
+      if (!result) {
+        // Local fallback nếu backend tạm ngưng
+        await deleteTelegramWebhook(botConfig.botToken, true);
+        const me = await getBotMe(botConfig.botToken);
+        result = { success: true, bot: me, message: 'Đã giải phóng Webhook và dọn sạch tin đọng!' };
+      }
+
+      setIsPolling(true);
+      const updated = { ...botConfig, enableCron: true };
+      setBotConfig(updated);
+      saveBotConfig(updated);
+
+      if (result.bot) {
+        setDiagResult({ success: true, bot: result.bot, webhook: { url: '', pending_update_count: 0 } });
+      }
+
+      showFeedback('🛠 ĐÃ TỰ ĐỘNG SỬA LỖI & RESET XUNG ĐỘT THÀNH CÔNG!');
+      setBotLogs(prev => [
+        `[${new Date().toLocaleTimeString()}] 🛠 1-Click Fix: Đã dọn dẹp Webhook kẹt, triệt tiêu lỗi conflict getUpdates, khởi động lại engine nhận tin.`,
+        ...prev
+      ]);
+    } catch (err) {
+      alert('Lỗi sửa tự động: ' + err.message);
+    } finally {
+      setAutoFixLoading(false);
+    }
+  };
+
+  // 3. Chẩn đoán kết nối Bot (Health Check / getMe / getWebhookInfo)
   const handleRunBotDiagnosis = async () => {
     if (!botConfig.botToken) {
       alert('Vui lòng nhập Telegram Bot Token trước khi kiểm tra!');
@@ -183,17 +422,13 @@ export default function AdminPanel({ signals, onDataChange }) {
 
       setDiagResult(resData);
       if (resData.success && resData.bot) {
-        showFeedback(`✅ Kết nối Bot thành công: @${resData.bot.username} (${resData.bot.first_name})`);
+        showFeedback(`✅ Bot sẵn sàng: @${resData.bot.username} (${resData.bot.first_name})`);
         setBotLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] ✅ Chẩn đoán Bot thành công: @${resData.bot.username} (ID: ${resData.bot.id}) - Quyền đọc nhóm: ${resData.bot.can_read_all_group_messages ? 'BẬT' : 'TẮT (Cần /setprivacy)'}`,
+          `[${new Date().toLocaleTimeString()}] ✅ Bot: @${resData.bot.username} - Quyền đọc nhóm: ${resData.bot.can_read_all_group_messages ? 'BẬT' : 'TẮT (Cần /setprivacy)'}`,
           ...prev
         ]);
       } else {
         showFeedback(`❌ Lỗi Bot: ${resData.error || 'Token không hợp lệ'}`);
-        setBotLogs(prev => [
-          `[${new Date().toLocaleTimeString()}] ❌ Lỗi kết nối Bot: ${resData.error}`,
-          ...prev
-        ]);
       }
     } catch (err) {
       setDiagResult({ success: false, error: err.message });
@@ -203,7 +438,7 @@ export default function AdminPanel({ signals, onDataChange }) {
     }
   };
 
-  // 2. Xóa Webhook
+  // 4. Xóa Webhook
   const handleClearWebhook = async (dropPending = false) => {
     if (!botConfig.botToken) {
       alert('Vui lòng nhập Bot Token!');
@@ -226,7 +461,7 @@ export default function AdminPanel({ signals, onDataChange }) {
         resData = { success: ok, message: 'Đã xóa Webhook thành công!' };
       }
 
-      showFeedback('🧹 Đã xóa Webhook Telegram thành công! Bây giờ Bot có thể nhận tin qua getUpdates.');
+      showFeedback('🧹 Đã xóa Webhook Telegram thành công!');
       setBotLogs(prev => [`[${new Date().toLocaleTimeString()}] 🧹 Đã giải phóng Webhook Telegram.`, ...prev]);
       handleRunBotDiagnosis();
     } catch (err) {
@@ -236,15 +471,19 @@ export default function AdminPanel({ signals, onDataChange }) {
     }
   };
 
-  // 3. Soi getUpdates mới nhất trực tiếp từ Telegram
+  const [webhookActiveWarning, setWebhookActiveWarning] = useState(null);
+
+  // 5. Soi tin nhắn mới nhất trực tiếp từ Telegram an toàn
   const handleInspectUpdates = async () => {
     if (!botConfig.botToken) {
       alert('Vui lòng nhập Bot Token!');
       return;
     }
     setInspectLoading(true);
+    setWebhookActiveWarning(null);
     try {
       let items = [];
+      let webhookMode = false;
       try {
         const res = await fetch(`${API_BASE_URL}/api/admin/bot/inspect-updates`, {
           method: 'POST',
@@ -254,53 +493,83 @@ export default function AdminPanel({ signals, onDataChange }) {
         if (res.ok) {
           const data = await res.json();
           items = data.items || [];
+          if (data.isWebhookActive) {
+            webhookMode = true;
+            setWebhookActiveWarning({
+              url: data.webhookInfo?.url || botConfig.webhookUrl || 'Đang kết nối Webhook',
+              pendingCount: data.webhookInfo?.pending_update_count || 0,
+              message: data.message || 'Bot đang ở chế độ Webhook.'
+            });
+          }
         }
       } catch (e) {}
 
-      if (items.length === 0) {
-        const raw = await inspectRecentUpdates(botConfig.botToken, 20);
-        items = (raw || []).map(upd => {
-          const msg = upd.message || upd.channel_post || upd.edited_message;
-          if (!msg) return null;
-          const textContent = msg.text || msg.caption || '';
-          const updateChatId = String(msg.chat?.id || '');
-          const chatTitle = msg.chat?.title || msg.chat?.username || msg.chat?.first_name || 'Chat ' + updateChatId;
-          const chatType = msg.chat?.type || 'unknown';
-          const senderUsername = (msg.from?.username || '').toLowerCase();
-          const senderName = msg.from?.first_name || msg.from?.username || (chatType === 'channel' ? 'Channel Admin' : 'Unknown');
+      if (items.length === 0 && !webhookMode) {
+        try {
+          const raw = await inspectRecentUpdates(botConfig.botToken, 20);
+          items = (raw || []).map(upd => {
+            const msg = upd.message || upd.channel_post || upd.edited_message;
+            if (!msg) return null;
+            const textContent = msg.text || msg.caption || '';
+            const updateChatId = String(msg.chat?.id || '');
+            const chatTitle = msg.chat?.title || msg.chat?.username || msg.chat?.first_name || 'Chat ' + updateChatId;
+            const chatType = msg.chat?.type || 'unknown';
+            const senderUsername = (msg.from?.username || '').toLowerCase();
+            const senderName = msg.from?.first_name || msg.from?.username || (chatType === 'channel' ? 'Channel Admin' : 'Unknown');
 
-          const isChatIdMatched = !botConfig.chatId || updateChatId === String(botConfig.chatId).trim();
-          const targetBot = (botConfig.targetBotUsername || '').toLowerCase().replace('@', '');
-          const isSenderMatched = !targetBot || senderUsername.includes(targetBot) || senderName.toLowerCase().includes(targetBot) || chatType === 'channel';
+            const isChatIdMatched = !botConfig.chatId || updateChatId === String(botConfig.chatId).trim();
+            const targetBot = (botConfig.targetBotUsername || '').toLowerCase().replace('@', '');
+            const isSenderMatched = !targetBot || senderUsername.includes(targetBot) || senderName.toLowerCase().includes(targetBot) || chatType === 'channel';
 
-          const testParse = textContent ? splitMessages(textContent).map(parseTelegramMessage).filter(Boolean) : [];
+            const testParse = textContent ? splitMessages(textContent).map(parseTelegramMessage).filter(Boolean) : [];
 
-          return {
-            updateId: upd.update_id,
-            date: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
-            chatId: updateChatId,
-            chatTitle,
-            chatType,
-            senderName,
-            senderUsername,
-            text: textContent,
-            isChatIdMatched,
-            isSenderMatched,
-            canParse: testParse.length > 0,
-            parsedCount: testParse.length,
-            parsedPreview: testParse[0] || null
-          };
-        }).filter(Boolean);
+            return {
+              updateId: upd.update_id,
+              source: 'polling',
+              date: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
+              chatId: updateChatId,
+              chatTitle,
+              chatType,
+              senderName,
+              senderUsername,
+              text: textContent,
+              isChatIdMatched,
+              isSenderMatched,
+              canParse: testParse.length > 0,
+              parsedCount: testParse.length,
+              parsedPreview: testParse[0] || null
+            };
+          }).filter(Boolean);
+        } catch (rawErr) {
+          if (rawErr.message && rawErr.message.includes('webhook is active')) {
+            webhookMode = true;
+            setWebhookActiveWarning({
+              url: botConfig.webhookUrl || 'Webhook đang hoạt động',
+              pendingCount: 0,
+              message: 'Telegram đang ở chế độ Webhook.'
+            });
+          } else if (rawErr.message && (rawErr.message.includes('terminated by other getUpdates') || rawErr.message.includes('Conflict'))) {
+            showFeedback('ℹ️ Đang có tiến trình Telegram chạy. Bạn có thể nhấn "1-Click Sửa Lỗi" để reset sạch.');
+          } else {
+            throw rawErr;
+          }
+        }
       }
 
       setInspectedUpdates(items);
-      if (items.length > 0) {
-        showFeedback(`📡 Đã soi thấy ${items.length} tin nhắn gần nhất từ Telegram!`);
+      if (webhookMode) {
+        showFeedback(items.length > 0 ? `⚡️ Chế độ Webhook: Đã nhận ${items.length} tin gần đây!` : '⚡️ Chế độ Webhook: Chưa có tin nhắn mới.');
+      } else if (items.length > 0) {
+        showFeedback(`📡 Đã soi thấy ${items.length} tin nhắn gần nhất!`);
       } else {
-        showFeedback('📡 Chưa có tin nhắn mới nào trên Telegram Bot. Hãy gửi 1 tin trong Group/Channel rồi bấm lại!');
+        showFeedback('📡 Chưa có tin nhắn mới nào. Gửi 1 tin trong Group/Channel rồi bấm Soi lại!');
       }
     } catch (err) {
-      alert('Lỗi soi getUpdates: ' + err.message);
+      if (err.message && (err.message.includes('terminated by other getUpdates') || err.message.includes('Conflict'))) {
+        showFeedback('⚠️ Phát hiện xung đột Telegram! Nhấn "1-Click Sửa Lỗi & Reset" để khắc phục ngay.');
+      } else {
+        showFeedback(`ℹ️ Trạng thái: ${err.message}`);
+      }
     } finally {
       setInspectLoading(false);
     }
@@ -524,25 +793,32 @@ export default function AdminPanel({ signals, onDataChange }) {
       <div className="admin-header">
         <div className="admin-header-left">
           <span className="admin-badge">⚡️ ADMIN CONTROL CENTER</span>
-          <h1 className="admin-main-title">Quản Lý & Bóc Tách Dữ Liệu Telegram</h1>
+          <h1 className="admin-main-title">Telegram Signal Parser & Bot Management</h1>
         </div>
         <div className="admin-header-actions">
           <button className="btn-secondary" onClick={exportSignalsJSON}>
-            📥 Xuất File .JSON ({signals.length})
+            📥 Export .JSON ({signals.length})
           </button>
           <label className="btn-secondary file-upload-label">
-            📤 Nhập .JSON
+            📤 Import .JSON
             <input type="file" accept=".json" onChange={handleImportJSON} style={{ display: 'none' }} />
           </label>
           <button className="btn-danger-outline" onClick={handleResetDefault}>
-            🔄 Khôi phục Mẫu
+            🔄 Reset Sample Data
           </button>
         </div>
       </div>
 
       {successMsg && (
-        <div className="admin-alert-toast">
-          {successMsg}
+        <div className="admin-alert-toast" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+          <span>{successMsg}</span>
+          <button
+            onClick={() => setSuccessMsg('')}
+            style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '14px', padding: '0 4px', opacity: 0.8 }}
+            title="Dismiss notification"
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -552,67 +828,67 @@ export default function AdminPanel({ signals, onDataChange }) {
           className={`admin-tab-btn ${activeTab === 'input' ? 'active' : ''}`}
           onClick={() => setActiveTab('input')}
         >
-          📝 Nạp Tin Nhắn & Parser
+          📝 Ingest Message & Parser
         </button>
         <button
           className={`admin-tab-btn ${activeTab === 'table' ? 'active' : ''}`}
           onClick={() => setActiveTab('table')}
         >
-          📋 Danh Sách Dữ Liệu ({signals.length})
+          📋 Signal Database ({signals.length})
         </button>
         <button
           className={`admin-tab-btn ${activeTab === 'json' ? 'active' : ''}`}
           onClick={() => setActiveTab('json')}
         >
-          🔍 Xem Raw JSON
+          🔍 Raw JSON Schema
         </button>
         <button
           className={`admin-tab-btn ${activeTab === 'bot' ? 'active' : ''}`}
           onClick={() => setActiveTab('bot')}
         >
-          🤖 Cấu Hình Bot Telegram {isPolling && <span className="pulse-mini"></span>}
+          🤖 Bot Configuration {isPolling && <span className="pulse-mini"></span>}
         </button>
         <button
           className={`admin-tab-btn tab-highlight-pulse ${activeTab === 'bot_test' ? 'active' : ''}`}
           onClick={() => setActiveTab('bot_test')}
         >
-          🛠️ Test & Chẩn Đoán Bot
+          🛠️ Bot Test & Diagnostics
         </button>
       </div>
 
-      {/* TAB 1: NẠP TIN NHẮN TELEGRAM */}
+      {/* TAB 1: INGEST TELEGRAM MESSAGE */}
       {activeTab === 'input' && (
         <div className="admin-section-card">
           <div className="section-subtitle">
-            Nhập hoặc dán tin nhắn bất kỳ từ nhóm Telegram vào đây. Hệ thống tự động bóc tách thành đối tượng JSON chuẩn và lưu trữ realtime.
+            Enter or paste any raw signal message from Telegram. The system automatically parses trading signals into structured JSON records and broadcasts them in realtime.
           </div>
 
           <div className="quick-templates">
-            <span className="quick-label">⚡️ Mẫu thử nhanh (1-Click Test):</span>
+            <span className="quick-label">⚡️ Quick Templates (1-Click Test):</span>
             <button className="btn-tpl" onClick={() => handleLoadTemplate(TEMPLATE_SETUP, true)}>
-              💎 1. Tín hiệu Setup (Gann Buy Limit)
+              💎 1. Setup Signal (Gann Buy Limit)
             </button>
             <button className="btn-tpl" onClick={() => handleLoadTemplate(TEMPLATE_EXECUTED, true)}>
-              🚀 2. Đã vào lệnh #9
+              🚀 2. Order Executed #9
             </button>
             <button className="btn-tpl" onClick={() => handleLoadTemplate(TEMPLATE_CANCELLED, true)}>
-              ⛔️ 3. Hủy lệnh #9 (Chạm TP trước)
+              ⛔️ 3. Order Cancelled #9
             </button>
             <button className="btn-tpl" onClick={() => handleLoadTemplate(TEMPLATE_SL, true)}>
-              🛑 4. Cắt lỗ SL Hit #7 (-92.7p)
+              🛑 4. Stop Loss Hit #7 (-92.7p)
             </button>
             <button className="btn-tpl" onClick={() => handleLoadTemplate(TEMPLATE_TP, true)}>
-              ✅ 5. Chốt lời TP Hit #4 (+51.2p)
+              ✅ 5. Take Profit Hit #4 (+51.2p)
             </button>
             <button className="btn-tpl-highlight" onClick={() => handleLoadTemplate(SAMPLE_RAW_TEXT, true)}>
-              📦 6. Nạp Full Bundle (5 tin nhắn cùng lúc)
+              📦 6. Ingest Full Bundle (5 messages)
             </button>
           </div>
 
           <div className="input-group">
             <textarea
               className="telegram-textarea"
-              placeholder="Dán tin nhắn Telegram từ nhóm người khác gửi tại đây..."
+              placeholder="Paste raw Telegram message here..."
               rows={8}
               value={rawInput}
               onChange={(e) => setRawInput(e.target.value)}
@@ -621,21 +897,21 @@ export default function AdminPanel({ signals, onDataChange }) {
 
           <div className="input-actions">
             <button className="btn-primary-action" onClick={handleParseAndSave}>
-              🚀 Phân Tích & Lưu Vào JSON Ngay
+              🚀 Parse & Save to Database Now
             </button>
             <button className="btn-secondary" onClick={() => setRawInput('')}>
-              Làm trống ô
+              Clear Field
             </button>
           </div>
         </div>
       )}
 
-      {/* TAB 2: BẢNG DỮ LIỆU ĐÃ LƯU */}
+      {/* TAB 2: SIGNAL DATABASE TABLE */}
       {activeTab === 'table' && (
         <div className="admin-section-card">
           <div className="table-filter-bar">
             <div className="filter-group">
-              <span>Lọc trạng thái:</span>
+              <span>Filter Status:</span>
               {['ALL', 'TP', 'SL', 'CANCELLED', 'ACTIVE', 'PENDING'].map(st => (
                 <button
                   key={st}
@@ -648,7 +924,7 @@ export default function AdminPanel({ signals, onDataChange }) {
             </div>
 
             <button className="btn-danger-sm" onClick={handleClearAll}>
-              🗑 Xóa tất cả ({signals.length})
+              🗑 Clear All ({signals.length})
             </button>
           </div>
 
@@ -656,21 +932,21 @@ export default function AdminPanel({ signals, onDataChange }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Thời Gian</th>
-                  <th>Cặp Tiền</th>
-                  <th>Loại / Lệnh</th>
-                  <th>Giá Vào (Entry)</th>
+                  <th>Time</th>
+                  <th>Pair</th>
+                  <th>Action / Order</th>
+                  <th>Entry Price</th>
                   <th>SL / TP</th>
                   <th>Pips</th>
-                  <th>Trạng Thái</th>
-                  <th>Thao Tác</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredSignals.length === 0 ? (
                   <tr>
                     <td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
-                      Không có bản ghi nào phù hợp.
+                      No matching records found.
                     </td>
                   </tr>
                 ) : (
@@ -717,10 +993,10 @@ export default function AdminPanel({ signals, onDataChange }) {
                         </td>
                         <td>
                           <div className="table-actions">
-                            <button className="btn-icon" title="Xem JSON" onClick={() => setSelectedRecord(item)}>
+                            <button className="btn-icon" title="View JSON" onClick={() => setSelectedRecord(item)}>
                               👁
                             </button>
-                            <button className="btn-icon-danger" title="Xóa" onClick={() => handleDeleteRecord(item.id)}>
+                            <button className="btn-icon-danger" title="Delete" onClick={() => handleDeleteRecord(item.id)}>
                               ✕
                             </button>
                           </div>
@@ -735,16 +1011,16 @@ export default function AdminPanel({ signals, onDataChange }) {
         </div>
       )}
 
-      {/* TAB 3: XEM RAW JSON */}
+      {/* TAB 3: RAW JSON SCHEMA */}
       {activeTab === 'json' && (
         <div className="admin-section-card">
           <div className="json-header">
-            <h3>📦 Dữ Liệu JSON Toàn Cục (Realtime Schema)</h3>
+            <h3>📦 Global Realtime JSON Schema Database</h3>
             <button className="btn-secondary" onClick={() => {
               navigator.clipboard.writeText(JSON.stringify(signals, null, 2));
-              showFeedback('📋 Đã sao chép toàn bộ JSON vào Clipboard!');
+              showFeedback('📋 Copied full JSON database to Clipboard!');
             }}>
-              📋 Sao chép JSON
+              📋 Copy JSON
             </button>
           </div>
           <pre className="json-viewer">
@@ -753,41 +1029,41 @@ export default function AdminPanel({ signals, onDataChange }) {
         </div>
       )}
 
-      {/* TAB 4: CẤU HÌNH BOT TELEGRAM */}
+      {/* TAB 4: TELEGRAM BOT CONFIGURATION */}
       {activeTab === 'bot' && (
         <div className="admin-section-card">
-          <h3 style={{ marginBottom: '10px' }}>🤖 Kết Nối Telegram Bot API Trực Tiếp</h3>
+          <h3 style={{ marginBottom: '10px' }}>🤖 Direct Telegram Bot API Integration</h3>
           <p className="section-subtitle">
-            Bot chỉ đọc được tin nhắn ở nơi bot được thêm vào: chat riêng với bot, group có bot, hoặc channel mà bot là admin.
+            The bot reads messages from private chats, groups, and channels where it has been granted access permissions.
           </p>
 
           <div className="telegram-source-guide">
             <div className="source-guide-item">
               <span className="source-guide-step">1</span>
               <div>
-                <strong>Tạo bot</strong>
-                <span>Lấy token từ @BotFather rồi dán vào ô bên dưới.</span>
+                <strong>Create Bot</strong>
+                <span>Obtain API token from @BotFather and paste below.</span>
               </div>
             </div>
             <div className="source-guide-item">
               <span className="source-guide-step">2</span>
               <div>
-                <strong>Gắn bot vào nguồn tin</strong>
-                <span>Với channel: thêm bot làm admin. Với group: thêm bot vào group và cho phép đọc tin nhắn.</span>
+                <strong>Add Bot to Group/Channel</strong>
+                <span>For channels: add bot as Administrator. For groups: add bot and disable Privacy Mode.</span>
               </div>
             </div>
             <div className="source-guide-item">
               <span className="source-guide-step">3</span>
               <div>
-                <strong>Gửi tin test</strong>
-                <span>Bật lắng nghe rồi gửi một tin mẫu trong channel/group. Log sẽ hiện Chat ID để bạn lọc đúng nguồn.</span>
+                <strong>Verify Live Stream</strong>
+                <span>Start listener and send a sample signal to confirm matching Chat ID.</span>
               </div>
             </div>
           </div>
 
           <div className="form-grid">
             <div className="form-group">
-              <label>Telegram Bot Token (từ @BotFather):</label>
+              <label>Telegram Bot Token (from @BotFather):</label>
               <input
                 type="text"
                 className="admin-input"
@@ -797,7 +1073,7 @@ export default function AdminPanel({ signals, onDataChange }) {
               />
             </div>
             <div className="form-group">
-              <label>Chu kỳ kiểm tra (ms):</label>
+              <label>Polling Interval (ms):</label>
               <input
                 type="number"
                 className="admin-input"
@@ -806,11 +1082,11 @@ export default function AdminPanel({ signals, onDataChange }) {
               />
             </div>
             <div className="form-group form-grid-full">
-              <label>Chat ID / Channel ID cần nghe (tùy chọn):</label>
+              <label>Target Chat ID / Channel ID (optional):</label>
               <input
                 type="text"
                 className="admin-input"
-                placeholder="Để trống = nghe tất cả nơi bot có mặt. Channel/group thường có dạng -100xxxxxxxxxx"
+                placeholder="Leave empty to receive from all groups. Example: -100xxxxxxxxxx"
                 value={botConfig.chatId || ''}
                 onChange={(e) => setBotConfig({ ...botConfig, chatId: e.target.value.trim() })}
               />
@@ -822,25 +1098,25 @@ export default function AdminPanel({ signals, onDataChange }) {
               className={isPolling ? 'btn-danger-action' : 'btn-primary-action'}
               onClick={handleTogglePolling}
             >
-              {isPolling ? '⏹ Dừng Lắng Nghe Telegram' : '▶ Bắt Đầu Lắng Nghe Realtime'}
+              {isPolling ? '⏹ Stop Telegram Poller' : '▶ Start Realtime Listener'}
             </button>
             <button className="btn-secondary" onClick={async () => {
               try {
                 await saveBotConfigToBackend(botConfig);
-                showFeedback('💾 Đã lưu cấu hình Bot vào backend!');
+                showFeedback('💾 Saved Bot configuration to backend!');
               } catch (err) {
-                setBotLogs(prev => [`[${new Date().toLocaleTimeString()}] ❌ Không lưu được backend: ${err.message}`, ...prev]);
+                setBotLogs(prev => [`[${new Date().toLocaleTimeString()}] ❌ Failed to save backend: ${err.message}`, ...prev]);
               }
             }}>
-              Lưu Cấu Hình
+              Save Configuration
             </button>
           </div>
 
           {/* Bot Logs */}
           <div className="bot-logs-box">
-            <div className="logs-title">Nhật ký kết nối (Logs):</div>
+            <div className="logs-title">Event & Connection Logs:</div>
             {botLogs.length === 0 ? (
-              <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>Chưa có sự kiện nào.</div>
+              <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>No events logged yet.</div>
             ) : (
               botLogs.map((log, idx) => (
                 <div key={idx} className="log-line">{log}</div>
@@ -850,73 +1126,110 @@ export default function AdminPanel({ signals, onDataChange }) {
         </div>
       )}
 
-      {/* TAB 5: TEST & CHẨN ĐOÁN BOT TELEGRAM */}
+      {/* TAB 5: BOT TEST & DIAGNOSTICS */}
       {activeTab === 'bot_test' && (
         <div className="admin-section-card test-bot-section">
-          <div className="test-bot-header">
-            <div>
-              <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                🛠️ Bộ Công Cụ Test Nhận Bot & Chẩn Đoán Toàn Diện
-                <span className="live-status-pill online">REALTIME DIAGNOSTICS</span>
-              </h3>
-              <p className="section-subtitle" style={{ margin: '6px 0 0 0' }}>
-                Chẩn đoán lỗi không nhận tin nhắn, soi trực tiếp getUpdates từ Telegram, và giả lập bắn tín hiệu qua toàn bộ Pipeline.
-              </p>
-            </div>
-            <div className="test-quick-actions">
-              <button
-                className="btn-primary-action"
-                onClick={handleRunBotDiagnosis}
-                disabled={diagLoading}
-              >
-                {diagLoading ? '⏳ Đang kiểm tra...' : '🔍 1-Click Chẩn Đoán Bot'}
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={handleInspectUpdates}
-                disabled={inspectLoading}
-              >
-                {inspectLoading ? '⏳ Đang quét...' : '📡 Soi Tin Nhắn Mới Nhất'}
-              </button>
-            </div>
+          {/* 1. TWO PRIMARY ACTION BUTTONS */}
+          <div className="diag-hero-actions">
+            {/* HERO BUTTON 1: AUTO CONNECT */}
+            <button
+              className={`btn-hero-primary ${isPolling ? 'active-running' : ''}`}
+              onClick={handleToggleAutoConnect}
+            >
+              <span className="hero-icon">{isPolling ? '🟢' : '⚡️'}</span>
+              <div className="hero-text">
+                <div className="hero-title">
+                  {isPolling ? 'RECEIVING SIGNALS LIVE (CLICK TO PAUSE)' : '1-CLICK AUTO CONNECT & RECEIVE SIGNALS'}
+                </div>
+                <div className="hero-desc">
+                  {isPolling
+                    ? 'Realtime engine is actively listening for signals from Group/Channel'
+                    : 'Automatically activate bot to receive signals from Telegram'}
+                </div>
+              </div>
+            </button>
+
+            {/* HERO BUTTON 2: AUTO FIX & RESET CONFLICT */}
+            <button
+              className="btn-hero-fix"
+              onClick={handleAutoFixBot}
+              disabled={autoFixLoading}
+            >
+              <span className="hero-icon">🛠</span>
+              <div className="hero-text">
+                <div className="hero-title">
+                  {autoFixLoading ? 'FIXING CONFLICTS...' : '1-CLICK FIX CONFLICTS & RESET BOT'}
+                </div>
+                <div className="hero-desc">
+                  Clear stuck webhooks, resolve getUpdates conflicts, and reset clean session
+                </div>
+              </div>
+            </button>
           </div>
 
-          {/* 1. BẢNG TRẠNG THÁI SỨC KHỎE BOT (HEALTH STATUS CARD) */}
+          {/* 2. QUICK TOOLBAR */}
+          <div className="diag-quick-toolbar">
+            <button
+              className="btn-toolbar-action"
+              onClick={handleInspectUpdates}
+              disabled={inspectLoading}
+            >
+              {inspectLoading ? '⏳ Scanning...' : '📡 Inspect Recent Messages'}
+            </button>
+
+            <button
+              className="btn-toolbar-action"
+              onClick={() => handleSimulateReceive(TEMPLATE_SETUP)}
+              disabled={simulateLoading}
+            >
+              {simulateLoading ? '⏳ Injecting...' : '🧪 Send Test Signal (Test Chime)'}
+            </button>
+
+            <button
+              className="btn-toolbar-sub"
+              onClick={handleRunBotDiagnosis}
+              disabled={diagLoading}
+            >
+              {diagLoading ? '⏳ Checking...' : '🔍 Check Bot & Permissions'}
+            </button>
+          </div>
+
+          {/* 3. BOT HEALTH STATUS CARDS */}
           <div className="diag-health-grid">
             <div className="diag-health-card">
-              <div className="diag-card-label">🔑 TOKEN BOT</div>
+              <div className="diag-card-label">🔑 BOT TOKEN</div>
               <div className="diag-card-value">
                 {botConfig.botToken ? (
                   <span className="text-success">
-                    ✅ Đã cấu hình ({botConfig.botToken.slice(0, 7)}...{botConfig.botToken.slice(-4)})
+                    ✅ Configured ({botConfig.botToken.slice(0, 7)}...{botConfig.botToken.slice(-4)})
                   </span>
                 ) : (
-                  <span className="text-danger">❌ Chưa nhập Bot Token</span>
+                  <span className="text-danger">❌ Token Not Provided</span>
                 )}
               </div>
             </div>
 
             <div className="diag-health-card">
-              <div className="diag-card-label">🤖 DANH TÍNH BOT</div>
+              <div className="diag-card-label">🤖 BOT IDENTITY</div>
               <div className="diag-card-value">
                 {diagResult?.bot ? (
                   <span className="text-info font-bold">
                     @{diagResult.bot.username} ({diagResult.bot.first_name})
                   </span>
                 ) : (
-                  <span className="text-muted">Chưa kiểm tra (Bấm nút chẩn đoán)</span>
+                  <span className="text-muted">Not checked (Click "Check Bot")</span>
                 )}
               </div>
             </div>
 
             <div className="diag-health-card">
-              <div className="diag-card-label">🛡️ QUYỀN ĐỌC TIN TRONG NHÓM (PRIVACY)</div>
+              <div className="diag-card-label">🛡️ GROUP PERMISSION (PRIVACY)</div>
               <div className="diag-card-value">
                 {diagResult?.bot ? (
                   diagResult.bot.can_read_all_group_messages ? (
-                    <span className="text-success">✅ TẮT Privacy (Đọc được mọi tin)</span>
+                    <span className="text-success">✅ Privacy DISABLED (Can read all messages)</span>
                   ) : (
-                    <span className="text-danger">⚠️ BẬT Privacy (Cần tắt trong @BotFather)</span>
+                    <span className="text-danger">⚠️ Privacy ENABLED (Disable in @BotFather)</span>
                   )
                 ) : (
                   <span className="text-muted">---</span>
@@ -925,105 +1238,62 @@ export default function AdminPanel({ signals, onDataChange }) {
             </div>
 
             <div className="diag-health-card">
-              <div className="diag-card-label">🌐 TRẠNG THÁI WEBHOOK</div>
+              <div className="diag-card-label">🌐 INGESTION MODE</div>
               <div className="diag-card-value">
-                {diagResult?.webhook ? (
-                  diagResult.webhook.url ? (
-                    <span className="text-danger">⚠️ Đang bật Webhook ({diagResult.webhook.url})</span>
-                  ) : (
-                    <span className="text-success">✅ Đã tắt Webhook (Sẵn sàng Long-polling)</span>
-                  )
+                {diagResult?.webhook?.url || tunnelStatus.active ? (
+                  <span className="text-info">⚡️ Webhook (Auto Tunnel)</span>
                 ) : (
-                  <span className="text-muted">---</span>
+                  <span className="text-success">⚡️ Realtime Long-Polling (&lt; 100ms)</span>
                 )}
               </div>
             </div>
           </div>
 
-          {/* CẢNH BÁO QUAN TRỌNG NẾU CÓ LỖI */}
-          {diagResult?.bot && !diagResult.bot.can_read_all_group_messages && (
+          {/* PRIVACY MODE WARNING IF ACTIVE */}
+          {diagResult?.bot && !diagResult.bot.can_read_all_group_messages && !hidePrivacyWarning && (
             <div className="diag-alert-warning">
-              <strong>⚠️ CẢNH BÁO PRIVACY MODE:</strong> Bot của bạn đang <strong>BẬT Privacy Mode</strong> trong Telegram. 
-              Điều này khiến bot <strong>KHÔNG THỂ ĐỌC ĐƯỢC</strong> tin nhắn của người khác hoặc bot khác trong Group!
+              <button
+                className="diag-alert-close"
+                onClick={() => setHidePrivacyWarning(true)}
+                title="Dismiss warning"
+              >
+                ✕
+              </button>
+              <strong>⚠️ PRIVACY MODE WARNING:</strong> Your bot currently has <strong>Privacy Mode ENABLED</strong> in Telegram. 
+              Telegram blocks this bot from reading messages from group members!
               <br />
-              👉 <strong>Cách sửa ngay:</strong> Mở Telegram nhắn cho <code>@BotFather</code> ➔ Gõ <code>/setprivacy</code> ➔ Chọn Bot của bạn ➔ Chọn <code>Disable</code>.
+              👉 <strong>Quick Fix:</strong> Open Telegram and message <code>@BotFather</code> ➔ send <code>/setprivacy</code> ➔ Select your Bot ➔ Select <code>Disable</code>.
             </div>
           )}
 
-          {diagResult?.webhook?.url && (
-            <div className="diag-alert-warning">
-              <strong>⚠️ CẢNH BÁO WEBHOOK ĐANG KẸT:</strong> Bot đang gắn Webhook tới <code>{diagResult.webhook.url}</code>. 
-              Khi Webhook đang bật, Telegram sẽ chặn cơ chế <code>getUpdates</code> khiến backend không nhận được tin!
-              <br />
-              👉 Hãy bấm nút <strong>"🧹 Xóa Webhook"</strong> bên dưới để giải phóng.
-            </div>
-          )}
-
-          {/* 2. KHU VỰC CÔNG CỤ CHẨN ĐOÁN & XÓA WEBHOOK */}
+          {/* 4. RECENT MESSAGES INSPECTOR */}
           <div className="diag-sub-panel">
-            <h4 className="diag-sub-title">1. Chẩn Đoán Chi Tiết & Quản Lý Webhook</h4>
-            <div className="diag-btn-row">
-              <button
-                className="btn-primary-sm"
-                onClick={handleRunBotDiagnosis}
-                disabled={diagLoading}
-              >
-                {diagLoading ? '⏳ Đang kiểm tra...' : '🔍 Chẩn Đoán Lại'}
-              </button>
-              <button
-                className="btn-danger-sm"
-                onClick={() => handleClearWebhook(false)}
-                disabled={clearWebhookLoading}
-              >
-                {clearWebhookLoading ? '⏳ Đang xóa...' : '🧹 Xóa Webhook (deleteWebhook)'}
-              </button>
-              <button
-                className="btn-danger-outline-sm"
-                onClick={() => handleClearWebhook(true)}
-                disabled={clearWebhookLoading}
-              >
-                🗑 Xóa Webhook & Bỏ Tin Cũ Đọng (Drop Pending)
-              </button>
-            </div>
-
-            {diagResult && (
-              <div className="diag-json-box">
-                <div className="diag-json-title">Kết quả phản hồi Telegram API:</div>
-                <pre className="diag-json-content">
-                  {JSON.stringify(diagResult, null, 2)}
-                </pre>
-              </div>
-            )}
-          </div>
-
-          {/* 3. SOI TIN NHẮN TELEGRAM MỚI NHẤT (LIVE GETUPDATES INSPECTOR) */}
-          <div className="diag-sub-panel">
-            <div className="diag-inspector-header">
+            <div className="diag-inspector-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
-                <h4 className="diag-sub-title">2. Soi Tin Nhắn Telegram Mới Nhất (Live getUpdates Inspector)</h4>
+                <h4 className="diag-sub-title">📡 Recently Received Telegram Messages</h4>
                 <p className="diag-desc">
-                  Trực tiếp quét các tin nhắn Bot vừa nhận được từ Telegram. Giúp bạn xem ngay <strong>Chat ID thật</strong>, <strong>Tên người gửi</strong> và xem hệ thống bóc tách được hay không.
+                  Inspects live messages captured by the bot. Copy verified <strong>Chat ID</strong> or test instant parsing.
                 </p>
               </div>
               <button
-                className="btn-primary-action"
+                className="btn-toolbar-action"
                 onClick={handleInspectUpdates}
                 disabled={inspectLoading}
               >
-                {inspectLoading ? '⏳ Đang quét Telegram...' : '📡 Quét Tin Nhắn Mới Nhất'}
+                {inspectLoading ? '⏳ Scanning...' : '🔄 Refresh Messages'}
               </button>
             </div>
 
             {/* Filter Status Bar */}
             <div className="diag-filter-status">
-              <span>🎯 Chat ID đang lọc: <strong>{botConfig.chatId || 'Tất cả (Không lọc)'}</strong></span>
-              <span>🤖 Bot Username đang lọc: <strong>{botConfig.targetBotUsername || 'Tất cả'}</strong></span>
-              <span>⚡️ Engine backend: <strong>{isPolling ? 'ĐANG CHẠY (ON)' : 'TẮT (OFF)'}</strong></span>
+              <span>🎯 Filtered Chat ID: <strong>{botConfig.chatId || 'All (No filter)'}</strong></span>
+              <span>👥 Sender: <strong>{botConfig.targetBotUsername ? `@${botConfig.targetBotUsername}` : '✅ ALL Members & Bots'}</strong></span>
+              <span>⚡️ Ingestion Engine: <strong>{isPolling ? '🟢 RUNNING' : '⚪️ STOPPED'}</strong></span>
             </div>
 
             {inspectedUpdates.length === 0 ? (
               <div className="diag-empty-box">
-                Chưa có dữ liệu quét. Nhấn <strong>"Quét Tin Nhắn Mới Nhất"</strong> sau khi bạn hoặc bot khác vừa gửi tin nhắn vào Group/Channel.
+                No recent messages in cache. Send a message in your Telegram Group/Channel and click <strong>"📡 Inspect Recent Messages"</strong>.
               </div>
             ) : (
               <div className="diag-updates-list">
@@ -1037,14 +1307,14 @@ export default function AdminPanel({ signals, onDataChange }) {
                         <button
                           className="btn-copy-id"
                           onClick={() => handleApplyChatId(item.chatId)}
-                          title="Lưu Chat ID này vào cấu hình để chỉ nhận từ nhóm này"
+                          title="Save this Chat ID to receive signals exclusively from this chat"
                         >
-                          📋 Dùng Chat ID này
+                          📋 Use this Chat ID
                         </button>
                       </div>
                       <div className="update-meta">
                         <span className="sender-tag">👤 @{item.senderUsername || item.senderName}</span>
-                        <span className="time-tag">{new Date(item.date).toLocaleTimeString('vi-VN')}</span>
+                        <span className="time-tag">{new Date(item.date).toLocaleTimeString('en-US')}</span>
                       </div>
                     </div>
 
@@ -1055,10 +1325,13 @@ export default function AdminPanel({ signals, onDataChange }) {
                     <div className="update-card-footer">
                       <div className="update-eval-tags">
                         <span className={`eval-pill ${item.isChatIdMatched ? 'eval-pass' : 'eval-fail'}`}>
-                          {item.isChatIdMatched ? '✅ Khớp Chat ID' : '⚠️ Bị lọc do khác Chat ID'}
+                          {item.isChatIdMatched ? '✅ Matched Chat ID' : '⚠️ Different Chat ID'}
+                        </span>
+                        <span className="eval-pill eval-pass">
+                          {item.senderUsername ? `👤 @${item.senderUsername}` : `👤 ${item.senderName}`}
                         </span>
                         <span className={`eval-pill ${item.canParse ? 'eval-pass' : 'eval-warn'}`}>
-                          {item.canParse ? `✅ Bóc tách: ${item.parsedCount} lệnh (${item.parsedPreview?.action} ${item.parsedPreview?.symbol})` : 'ℹ️ Không phải cấu trúc lệnh Forex/FinAI'}
+                          {item.canParse ? `✅ Parsed: ${item.parsedCount} order (${item.parsedPreview?.action} ${item.parsedPreview?.symbol})` : 'ℹ️ Non-standard Forex signal structure'}
                         </span>
                       </div>
 
@@ -1067,7 +1340,7 @@ export default function AdminPanel({ signals, onDataChange }) {
                         style={{ fontSize: '11px', padding: '5px 10px' }}
                         onClick={() => handleSimulateReceive(item.text)}
                       >
-                        ⚡️ Nạp tín hiệu này ngay
+                        ⚡️ Ingest Signal Now
                       </button>
                     </div>
                   </div>
@@ -1076,147 +1349,130 @@ export default function AdminPanel({ signals, onDataChange }) {
             )}
           </div>
 
-          {/* 4. GIẢ LẬP NHẬN TÍN HIỆU BOT (SIMULATE PIPELINE INJECTION) */}
-          <div className="diag-sub-panel">
-            <h4 className="diag-sub-title">3. Giả Lập Bot Nhận Tín Hiệu (Pipeline Simulator)</h4>
-            <p className="diag-desc">
-              Kiểm tra ngay luồng dữ liệu từ <strong>Backend ➔ Bóc tách Parser ➔ Lưu Database JSON ➔ Bắn SSE Realtime ➔ Chuông âm thanh Khách Hàng</strong>.
-            </p>
-
-            <div className="quick-templates" style={{ margin: '10px 0' }}>
-              <span className="quick-label">⚡️ Chọn mẫu lệnh test:</span>
-              <button className="btn-tpl" onClick={() => setSimulateText(TEMPLATE_SETUP)}>
-                💎 1. Setup Gann Buy Limit
-              </button>
-              <button className="btn-tpl" onClick={() => setSimulateText(TEMPLATE_EXECUTED)}>
-                🚀 2. Đã vào lệnh #9
-              </button>
-              <button className="btn-tpl" onClick={() => setSimulateText(TEMPLATE_TP)}>
-                ✅ 3. TP Hit #4 (+51.2p)
-              </button>
-              <button className="btn-tpl" onClick={() => setSimulateText(TEMPLATE_SL)}>
-                🛑 4. SL Hit #7 (-92.7p)
-              </button>
-              <button className="btn-tpl" onClick={() => setSimulateText(TEMPLATE_CANCELLED)}>
-                ⛔️ 5. Hủy lệnh #9
-              </button>
-              <button className="btn-tpl-highlight" onClick={() => setSimulateText(SAMPLE_RAW_TEXT)}>
-                📦 6. Full Bundle (5 tin)
-              </button>
-            </div>
-
-            <div className="input-group">
-              <textarea
-                className="telegram-textarea"
-                rows={5}
-                value={simulateText}
-                onChange={(e) => setSimulateText(e.target.value)}
-                placeholder="Dán hoặc chỉnh sửa tin nhắn giả lập..."
-              />
-            </div>
-
-            <div style={{ marginTop: '10px', display: 'flex', gap: '10px' }}>
-              <button
-                className="btn-primary-action"
-                onClick={() => handleSimulateReceive(simulateText)}
-                disabled={simulateLoading}
-              >
-                {simulateLoading ? '⏳ Đang bắn...' : '🧪 Bắn Tín Hiệu Giả Lập Vào Hệ Thống'}
-              </button>
-            </div>
-          </div>
-
-          {/* 5. GỬI TIN TEST TỪ BOT ĐẾN GROUP / CHANNEL */}
-          <div className="diag-sub-panel">
-            <h4 className="diag-sub-title">4. Test Gửi Tin Nhắn từ Bot đến Group / Kênh (sendMessage)</h4>
-            <p className="diag-desc">
-              Kiểm tra xem Bot có quyền phát biểu trong Group/Channel không và kiểm tra tính chính xác của Chat ID.
-            </p>
-
-            <div className="form-grid">
-              <div className="form-group">
-                <label>Chat ID / Group ID người nhận:</label>
-                <input
-                  type="text"
-                  className="admin-input"
-                  placeholder="Ví dụ: -100123456789 hoặc @tenchannel"
-                  value={testSendChatId}
-                  onChange={(e) => setTestSendChatId(e.target.value.trim())}
-                />
+          {/* 5. ADVANCED TOOLS (COLLAPSIBLE ACCORDION) */}
+          <details className="diag-advanced-details">
+            <summary>⚙️ Advanced Webhook Configuration & Manual Test (Click to expand)</summary>
+            
+            <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* 1-Click Auto Tunnel */}
+              <div className="auto-tunnel-banner" style={{ background: 'rgba(0, 0, 0, 0.4)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '12px 14px', borderRadius: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                  <div>
+                    <div style={{ fontWeight: '800', fontSize: '13px', color: '#38bdf8' }}>
+                      ⚡️ AUTOMATIC HTTPS TUNNEL WEBHOOK (1-CLICK)
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      Automatically opens a public HTTPS tunnel from localhost and registers with Telegram.
+                    </div>
+                  </div>
+                  <div>
+                    {tunnelStatus.active ? (
+                      <button className="btn-danger-sm" onClick={handleStopAutoTunnel} disabled={autoTunnelLoading}>
+                        {autoTunnelLoading ? '⏳...' : '⏹ Stop Auto Tunnel'}
+                      </button>
+                    ) : (
+                      <button className="btn-tpl-highlight" onClick={handleStartAutoTunnel} disabled={autoTunnelLoading} style={{ padding: '8px 14px', fontSize: '12px' }}>
+                        {autoTunnelLoading ? '⏳ Creating...' : '⚡️ Create Auto Tunnel'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {tunnelStatus.active && (
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#34d399' }}>
+                    🟢 Tunnel URL: <code>{tunnelStatus.webhookUrl}</code>
+                  </div>
+                )}
               </div>
+
+              {/* Custom Webhook URL Input */}
               <div className="form-group">
-                <label>Nội dung tin nhắn test:</label>
-                <input
-                  type="text"
-                  className="admin-input"
-                  placeholder="Ví dụ: 🔔 [FinAI Test] Bot kết nối thành công!"
-                  value={testSendMessage}
-                  onChange={(e) => setTestSendMessage(e.target.value)}
-                />
+                <label style={{ fontSize: '12px', fontWeight: '700' }}>Custom Webhook URL (HTTPS):</label>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                  <input
+                    type="text"
+                    className="admin-input"
+                    placeholder="https://your-domain.com/api/webhook"
+                    value={customWebhookUrl}
+                    onChange={(e) => setCustomWebhookUrl(e.target.value)}
+                  />
+                  <button className="btn-primary-action" onClick={() => handleRegisterCustomWebhook(false)} disabled={webhookActionLoading} style={{ whiteSpace: 'nowrap' }}>
+                    Set Webhook
+                  </button>
+                  <button className="btn-danger-sm" onClick={() => handleClearWebhook(false)} disabled={clearWebhookLoading} style={{ whiteSpace: 'nowrap' }}>
+                    Delete Webhook
+                  </button>
+                </div>
+              </div>
+
+              {/* Test sendMessage */}
+              <div className="form-group">
+                <label style={{ fontSize: '12px', fontWeight: '700' }}>Send Test Message from Bot to Chat ID:</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr auto', gap: '8px', marginTop: '4px' }}>
+                  <input
+                    type="text"
+                    className="admin-input"
+                    placeholder="Chat ID (-100...)"
+                    value={testSendChatId}
+                    onChange={(e) => setTestSendChatId(e.target.value.trim())}
+                  />
+                  <input
+                    type="text"
+                    className="admin-input"
+                    placeholder="Message text..."
+                    value={testSendMessage}
+                    onChange={(e) => setTestSendMessage(e.target.value)}
+                  />
+                  <button className="btn-secondary" onClick={handleSendTest} disabled={testSendLoading} style={{ whiteSpace: 'nowrap' }}>
+                    {testSendLoading ? '⏳...' : '📤 Send'}
+                  </button>
+                </div>
               </div>
             </div>
+          </details>
 
-            <div style={{ marginTop: '12px' }}>
-              <button
-                className="btn-secondary"
-                onClick={handleSendTest}
-                disabled={testSendLoading}
-              >
-                {testSendLoading ? '⏳ Đang gửi...' : '📤 Gửi Tin Nhắn Test từ Bot'}
-              </button>
-            </div>
-          </div>
-
-          {/* 6. HƯỚNG DẪN TỪNG BƯỚC KHẮC PHỤC LỖI KHÔNG NHẬN TIN */}
-          <div className="diag-sub-panel guide-box">
-            <h4 className="diag-sub-title">📚 Checklist Khắc Phục Lỗi Bot Không Nhận Tin Nhắn</h4>
-            <div className="checklist-items">
+          {/* 6. STEP-BY-STEP CHECKLIST */}
+          <details className="diag-advanced-details">
+            <summary>📚 Step-by-Step Bot Troubleshooting Checklist (Click to view)</summary>
+            <div className="checklist-items" style={{ marginTop: '12px' }}>
               <div className="checklist-item">
                 <span className="check-number">1</span>
                 <div>
-                  <strong>Tắt Privacy Mode trong @BotFather (BẮT BUỘC cho Group)</strong>
-                  <p>Mặc định Telegram chặn Bot đọc tin nhắn trong Group. Vào <code>@BotFather</code> ➔ gửi <code>/setprivacy</code> ➔ chọn Bot ➔ chọn <strong>Disable</strong>.</p>
+                  <strong>Disable Privacy Mode in @BotFather (REQUIRED for Groups)</strong>
+                  <p>Message <code>@BotFather</code> ➔ send <code>/setprivacy</code> ➔ select Bot ➔ select <strong>Disable</strong>.</p>
                 </div>
               </div>
               <div className="checklist-item">
                 <span className="check-number">2</span>
                 <div>
-                  <strong>Cấp quyền Quản Trị Viên (Administrator) nếu là Channel</strong>
-                  <p>Nếu bạn muốn bot đọc bài từ Channel, bạn BẮT BUỘC phải thêm bot làm <strong>Administrator</strong> của Channel đó.</p>
+                  <strong>Grant Administrator Privileges (REQUIRED for Channels)</strong>
+                  <p>If reading from a Telegram Channel, you MUST add the bot as an <strong>Administrator</strong> of that channel.</p>
                 </div>
               </div>
               <div className="checklist-item">
                 <span className="check-number">3</span>
                 <div>
-                  <strong>Kiểm tra và Xóa Webhook</strong>
-                  <p>Nếu trước đó bot từng dùng Webhook, hãy bấm <strong>"🧹 Xóa Webhook"</strong> ở trên để giải phóng kết nối getUpdates Long-polling.</p>
-                </div>
-              </div>
-              <div className="checklist-item">
-                <span className="check-number">4</span>
-                <div>
-                  <strong>Tìm đúng Chat ID của Nhóm</strong>
-                  <p>Gửi 1 tin nhắn bất kỳ vào Group ➔ Bấm <strong>"📡 Soi Tin Nhắn Mới Nhất"</strong> ở trên ➔ Bấm nút <strong>"📋 Dùng Chat ID này"</strong>.</p>
+                  <strong>Fix getUpdates Conflict Errors</strong>
+                  <p>Click the <strong>"🛠 1-Click Fix Conflicts & Reset Bot"</strong> button above to automatically resolve any session conflicts.</p>
                 </div>
               </div>
             </div>
-          </div>
+          </details>
         </div>
       )}
 
-      {/* Modal xem chi tiết 1 bản ghi JSON */}
+      {/* Modal view raw JSON */}
       {selectedRecord && (
         <div className="modal-overlay" onClick={() => setSelectedRecord(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>🔍 Chi Tiết Bản Ghi JSON ({selectedRecord.id})</h3>
+              <h3>🔍 JSON Record Details ({selectedRecord.id})</h3>
               <button className="btn-close" onClick={() => setSelectedRecord(null)}>✕</button>
             </div>
             <pre className="json-viewer" style={{ maxHeight: '400px' }}>
               {JSON.stringify(selectedRecord, null, 2)}
             </pre>
             <div style={{ marginTop: '14px', textAlign: 'right' }}>
-              <button className="btn-secondary" onClick={() => setSelectedRecord(null)}>Đóng</button>
+              <button className="btn-secondary" onClick={() => setSelectedRecord(null)}>Close</button>
             </div>
           </div>
         </div>

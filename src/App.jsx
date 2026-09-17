@@ -20,18 +20,20 @@ function getApiBaseUrl() {
 const API_BASE_URL = getApiBaseUrl();
 
 function getCurrentRoute() {
-  if (typeof window === 'undefined') return '/';
+  if (typeof window === 'undefined') return '/admin';
 
   const hashPath = window.location.hash.replace(/^#/, '');
+  if (hashPath === '/live' || hashPath === '/client') return '/live';
   if (hashPath === '/admin') return '/admin';
 
-  return window.location.pathname === '/admin' ? '/admin' : '/';
+  if (window.location.pathname === '/live' || window.location.pathname === '/client') return '/live';
+  return '/admin';
 }
 
 function App() {
   const [signals, setSignals] = useState([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [lastSync, setLastSync] = useState(new Date().toLocaleTimeString('vi-VN'));
+  const [lastSync, setLastSync] = useState(new Date().toLocaleTimeString('en-US'));
   const [pathname, setPathname] = useState(getCurrentRoute);
 
   const navigateTo = (path) => {
@@ -155,18 +157,18 @@ function App() {
         </span>
       </button>
 
-      <nav className="app-mode-switch" aria-label="Chuyển giao diện">
+      <nav className="app-mode-switch" aria-label="Mode Switch">
         <button
           className={`app-mode-btn ${isAdminRoute ? 'active' : ''}`}
           onClick={() => navigateTo('/admin')}
         >
-          Admin
+          Admin Portal
         </button>
         <button
           className={`app-mode-btn ${!isAdminRoute ? 'active' : ''}`}
-          onClick={() => navigateTo('/')}
+          onClick={() => navigateTo('/live')}
         >
-          Live
+          Live Signals
         </button>
       </nav>
 
@@ -182,7 +184,7 @@ function App() {
             setSoundEnabled(next);
             if (next) playSignalChime('new');
           }}
-          title={soundEnabled ? 'Âm thanh: Bật' : 'Âm thanh: Tắt'}
+          title={soundEnabled ? 'Sound: ON' : 'Sound: Muted'}
         >
           {soundEnabled ? '🔊' : '🔇'}
         </button>
@@ -197,7 +199,7 @@ function App() {
         <AdminPortalPage
           signals={signals}
           onDataChange={loadData}
-          onBackToClient={() => navigateTo('/')}
+          onBackToClient={() => navigateTo('/live')}
         />
       </div>
     );
@@ -205,6 +207,7 @@ function App() {
 
   return (
     <div className="finai-electron-shell live-shell">
+      {appHeader}
       <div className="mobile-window-drag-area" aria-hidden="true">
         <span></span>
         <span></span>

@@ -6,10 +6,10 @@ import { playSignalChime } from '../services/storageService';
 export default function ClientSignalPage({ signals, onOpenAdmin }) {
   const [subTab, setSubTab] = useState('signal'); // 'signal', 'analytics'
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [lastPingTime, setLastPingTime] = useState(new Date().toLocaleTimeString());
+  const [lastPingTime, setLastPingTime] = useState(new Date().toLocaleTimeString('en-US'));
 
   useEffect(() => {
-    setLastPingTime(new Date().toLocaleTimeString());
+    setLastPingTime(new Date().toLocaleTimeString('en-US'));
   }, [signals]);
 
   return (
@@ -20,7 +20,7 @@ export default function ClientSignalPage({ signals, onOpenAdmin }) {
           <div className="pulse-circle"></div>
           <div>
             <div className="client-brand-title">FinAI Realtime Signal</div>
-            <div className="client-brand-sub">Kênh Tín Hiệu Khách Hàng Trực Tiếp</div>
+            <div className="client-brand-sub">Live Client Signal Feed</div>
           </div>
         </div>
 
@@ -32,17 +32,17 @@ export default function ClientSignalPage({ signals, onOpenAdmin }) {
               setSoundEnabled(next);
               if (next) playSignalChime('new');
             }}
-            title={soundEnabled ? 'Âm thanh: BẬT' : 'Âm thanh: TẮT'}
+            title={soundEnabled ? 'Audio: ON' : 'Audio: MUTED'}
           >
-            {soundEnabled ? '🔊 Âm Báo: BẬT' : '🔇 Âm Báo: TẮT'}
+            {soundEnabled ? '🔊 Sound: ON' : '🔇 Sound: OFF'}
           </button>
 
           <button
             className="btn-admin-switch"
             onClick={onOpenAdmin}
-            title="Chuyển sang trang Quản trị"
+            title="Switch to Admin Portal"
           >
-            ⚙️ Cổng Admin
+            ⚙️ Admin Portal
           </button>
         </div>
       </header>
@@ -53,20 +53,20 @@ export default function ClientSignalPage({ signals, onOpenAdmin }) {
           className={`pill-btn ${subTab === 'signal' ? 'active' : ''}`}
           onClick={() => setSubTab('signal')}
         >
-          🎯 Tín Hiệu Live ({signals.length})
+          🎯 Live Signals ({signals.length})
         </button>
         <button
           className={`pill-btn ${subTab === 'analytics' ? 'active' : ''}`}
           onClick={() => setSubTab('analytics')}
         >
-          📈 Báo Cáo Hiệu Suất
+          📈 Performance Report
         </button>
       </div>
 
       {/* Live sync indicator */}
       <div className="client-sync-status">
         <span className="live-status-dot"></span>
-        <span>Đồng bộ Realtime • Cập nhật lúc {lastPingTime}</span>
+        <span>Realtime Sync • Updated at {lastPingTime}</span>
       </div>
 
       {/* Main Client Content */}

@@ -1,6 +1,10 @@
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
 
+// Tắt các cảnh báo log không cần thiết của Chromium Keychain trên macOS
+app.commandLine.appendSwitch('ignore-certificate-errors');
+app.commandLine.appendSwitch('log-level', '3');
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 430,

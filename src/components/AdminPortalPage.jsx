@@ -6,8 +6,7 @@ import logoUrl from '/favicon.svg';
 
 export default function AdminPortalPage({ signals, onDataChange, onBackToClient }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    // Lưu session đăng nhập tạm thời trong tab
-    return sessionStorage.getItem('finai_admin_auth') === 'true';
+    return sessionStorage.getItem('finai_admin_auth') !== 'false';
   });
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
@@ -23,13 +22,13 @@ export default function AdminPortalPage({ signals, onDataChange, onBackToClient 
       sessionStorage.setItem('finai_admin_auth', 'true');
       setPinError('');
     } else {
-      setPinError('Mã PIN không đúng! (Mặc định: 8888)');
+      setPinError('Incorrect PIN code! (Default: 8888)');
     }
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
-    sessionStorage.removeItem('finai_admin_auth');
+    sessionStorage.setItem('finai_admin_auth', 'false');
   };
 
   if (!isAuthenticated) {
@@ -37,16 +36,16 @@ export default function AdminPortalPage({ signals, onDataChange, onBackToClient 
       <div className="admin-login-screen">
         <div className="login-card">
           <img src={logoUrl} alt="FinAI Signals" className="login-brand-mark" />
-          <h2 className="login-title">FinAI Signals</h2>
-          <p className="login-sub">Khu vực quản trị dữ liệu & cấu hình Bot Telegram</p>
+          <h2 className="login-title">FinAI Signals Admin</h2>
+          <p className="login-sub">Telegram Bot Configuration & Signal Pipeline Management</p>
 
           <form onSubmit={handleLogin} className="login-form">
             <div className="form-group">
-              <label>Nhập Mã PIN Quản Trị:</label>
+              <label>Enter Admin PIN:</label>
               <input
                 type="password"
                 className="pin-input"
-                placeholder="Mã PIN (Mặc định: 8888)"
+                placeholder="PIN (Default: 8888)"
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
                 autoFocus
@@ -57,7 +56,7 @@ export default function AdminPortalPage({ signals, onDataChange, onBackToClient 
 
             <div className="login-actions">
               <button type="submit" className="btn-primary-action" style={{ width: '100%' }}>
-                🔓 Mở Khóa Đăng Nhập
+                🔓 Unlock Admin Dashboard
               </button>
               <button
                 type="button"
@@ -65,7 +64,7 @@ export default function AdminPortalPage({ signals, onDataChange, onBackToClient 
                 style={{ width: '100%', marginTop: '8px' }}
                 onClick={onBackToClient}
               >
-                ⬅ Quay Lại Giao Diện Khách Hàng
+                ⬅ Back to Live Signals View
               </button>
             </div>
           </form>
@@ -81,7 +80,7 @@ export default function AdminPortalPage({ signals, onDataChange, onBackToClient 
         <div className="admin-topbar-left">
           <span className="admin-tag">CONTROL CENTER</span>
           <span className="admin-stats-summary">
-            {signals.length} Tín hiệu • Realtime Active
+            {signals.length} Signals • Realtime Connected
           </span>
         </div>
 
@@ -90,27 +89,27 @@ export default function AdminPortalPage({ signals, onDataChange, onBackToClient 
             className={`admin-nav-item ${adminViewMode === 'manager' ? 'active' : ''}`}
             onClick={() => setAdminViewMode('manager')}
           >
-            Quản lý
+            Management
           </button>
           <button
             className={`admin-nav-item ${adminViewMode === 'report' ? 'active' : ''}`}
             onClick={() => setAdminViewMode('report')}
           >
-            Báo cáo
+            Analytics Report
           </button>
           <button
             className="btn-client-preview"
             onClick={onBackToClient}
-            title="Mở giao diện khách hàng"
+            title="Switch to Live Signals client view"
           >
-            Live View
+            Live Signals
           </button>
           <button
             className="btn-logout"
             onClick={handleLogout}
-            title="Đăng xuất"
+            title="Lock session"
           >
-            Đăng xuất
+            Lock
           </button>
         </div>
       </header>

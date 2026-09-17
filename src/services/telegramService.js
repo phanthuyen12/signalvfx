@@ -1,6 +1,6 @@
 /**
  * telegramService.js
- * Quản lý kết nối tự động với Telegram Bot API để đọc tin nhắn từ group/channel theo thời gian thực
+ * Manages Telegram Bot API connection to read messages from groups/channels in realtime.
  */
 
 import { addSignalsFromRawText } from './storageService';
@@ -28,8 +28,23 @@ async function requestTelegram(botToken, method, params = {}) {
   return data;
 }
 
+export async function setTelegramWebhook(botToken, webhookUrl, dropPendingUpdates = false) {
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
+  if (!webhookUrl || !webhookUrl.startsWith('https://')) {
+    throw new Error('Webhook URL must start with https://');
+  }
+
+  const data = await requestTelegram(botToken, 'setWebhook', {
+    url: webhookUrl,
+    drop_pending_updates: dropPendingUpdates,
+    allowed_updates: JSON.stringify(['message', 'channel_post', 'edited_message'])
+  });
+
+  return data.result;
+}
+
 export async function deleteTelegramWebhook(botToken, dropPendingUpdates = false) {
-  if (!botToken) throw new Error('Vui lòng nhập Telegram Bot Token');
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
 
   const data = await requestTelegram(botToken, 'deleteWebhook', {
     drop_pending_updates: dropPendingUpdates
@@ -40,7 +55,7 @@ export async function deleteTelegramWebhook(botToken, dropPendingUpdates = false
 }
 
 export async function fetchTelegramUpdates(botToken, chatId = '') {
-  if (!botToken) throw new Error('Vui lòng nhập Telegram Bot Token');
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
 
   const data = await requestTelegram(botToken, 'getUpdates', {
     offset: lastUpdateId + 1,
@@ -107,20 +122,20 @@ export function startTelegramPolling(botToken, intervalMs = 3000, onNewMessages,
 }
 
 export async function getBotMe(botToken) {
-  if (!botToken) throw new Error('Vui lòng nhập Telegram Bot Token');
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
   const data = await requestTelegram(botToken, 'getMe');
   return data.result;
 }
 
 export async function getTelegramWebhookInfo(botToken) {
-  if (!botToken) throw new Error('Vui lòng nhập Telegram Bot Token');
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
   const data = await requestTelegram(botToken, 'getWebhookInfo');
   return data.result;
 }
 
 export async function sendTelegramMessage(botToken, chatId, text) {
-  if (!botToken) throw new Error('Vui lòng nhập Telegram Bot Token');
-  if (!chatId) throw new Error('Vui lòng nhập Chat ID người nhận');
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
+  if (!chatId) throw new Error('Please enter recipient Chat ID');
   const data = await requestTelegram(botToken, 'sendMessage', {
     chat_id: chatId,
     text: text
@@ -129,7 +144,7 @@ export async function sendTelegramMessage(botToken, chatId, text) {
 }
 
 export async function inspectRecentUpdates(botToken, limit = 20) {
-  if (!botToken) throw new Error('Vui lòng nhập Telegram Bot Token');
+  if (!botToken) throw new Error('Please enter Telegram Bot Token');
   const data = await requestTelegram(botToken, 'getUpdates', {
     limit: limit,
     timeout: 3,

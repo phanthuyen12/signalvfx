@@ -6,11 +6,12 @@
   "type": "module",
   "main": "main.cjs",
   "scripts": {
-    "dev": "vite",
+    "start": "concurrently -k \"node cron-service.js\" \"vite --open\"",
+    "dev": "vite --open",
     "server": "node cron-service.js",
     "cron": "node cron-service.js",
     "test:cron": "node test-cron-simulator.js",
-    "start:all": "concurrently -k \"node cron-service.js\" \"vite\"",
+    "start:all": "concurrently -k \"node cron-service.js\" \"vite --open\"",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
@@ -18,6 +19,7 @@
     "electron:build": "vite build && electron-builder"
   },
   "dependencies": {
+    "localtunnel": "^2.0.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

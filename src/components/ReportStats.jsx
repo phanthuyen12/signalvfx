@@ -46,10 +46,10 @@ export default function ReportStats({ signals }) {
     };
   }, [signals]);
 
-  // Tạo dữ liệu biểu đồ Pips tích lũy
+  // Cumulative Pips Chart Data
   const chartPoints = useMemo(() => {
     let runningNet = 0;
-    const sorted = [...signals].reverse(); // Từ cũ đến mới
+    const sorted = [...signals].reverse(); // Oldest to newest
     const points = [{ index: 0, pips: 0 }];
 
     sorted.forEach((item, idx) => {
@@ -65,8 +65,8 @@ export default function ReportStats({ signals }) {
     <div className="report-dashboard">
       <div className="report-header-banner">
         <div>
-          <h2 className="report-title">📊 BÁO CÁO HIỆU SUẤT REALTIME</h2>
-          <p className="report-subtitle">Tự động tổng hợp và tính toán từ dữ liệu tin nhắn Telegram</p>
+          <h2 className="report-title">📊 REALTIME PERFORMANCE REPORT</h2>
+          <p className="report-subtitle">Aggregated and computed from Telegram signal feed</p>
         </div>
         <div className="live-indicator">
           <span className="pulse-dot"></span> LIVE SYNC
@@ -76,13 +76,13 @@ export default function ReportStats({ signals }) {
       {/* KPI Cards */}
       <div className="stats-kpi-grid">
         <div className="kpi-card winrate">
-          <div className="kpi-label">WIN RATE (TỶ LỆ THẮNG)</div>
+          <div className="kpi-label">WIN RATE</div>
           <div className="kpi-value">{stats.winRate}%</div>
-          <div className="kpi-meta">{stats.tpCount} Thắng / {stats.slCount} Thua</div>
+          <div className="kpi-meta">{stats.tpCount} Wins / {stats.slCount} Losses</div>
         </div>
 
         <div className={`kpi-card net ${stats.isNetPositive ? 'pos' : 'neg'}`}>
-          <div className="kpi-label">LỢI NHUẬN RÒNG (NET PIPS)</div>
+          <div className="kpi-label">NET PROFIT (PIPS)</div>
           <div className="kpi-value">
             {stats.isNetPositive ? `+${stats.netPips}p` : `${stats.netPips}p`}
           </div>
@@ -90,39 +90,39 @@ export default function ReportStats({ signals }) {
         </div>
 
         <div className="kpi-card total">
-          <div className="kpi-label">TỔNG SỐ LỆNH</div>
+          <div className="kpi-label">TOTAL SIGNALS</div>
           <div className="kpi-value">{stats.total}</div>
           <div className="kpi-meta">
-            ⏳ {stats.pendingCount} Chờ • ⚡️ {stats.activeCount} Khớp • ⛔️ {stats.cancelledCount} Hủy
+            ⏳ {stats.pendingCount} Pending • ⚡️ {stats.activeCount} Active • ⛔️ {stats.cancelledCount} Void
           </div>
         </div>
       </div>
 
-      {/* 3 Thẻ thống kê chi tiết */}
+      {/* 3 Detail Stat Cards */}
       <div className="report-grid">
         <div className="report-item tp">
-          <div className="report-label tp">✓ CHỐT LỜI (TP)</div>
+          <div className="report-label tp">✓ TAKE PROFIT (TP)</div>
           <div className="report-count tp">{stats.tpCount}</div>
           <div className="report-pips tp">+{stats.tpPips} pips</div>
         </div>
 
         <div className="report-item sl">
-          <div className="report-label sl">✗ CẮT LỖ (SL)</div>
+          <div className="report-label sl">✗ STOP LOSS (SL)</div>
           <div className="report-count sl">{stats.slCount}</div>
           <div className="report-pips sl">-{stats.slPips} pips</div>
         </div>
 
         <div className="report-item exit">
-          <div className="report-label exit">⛔️ HỦY / 0.0 PIPS</div>
+          <div className="report-label exit">⛔️ CANCELLED / 0.0 PIPS</div>
           <div className="report-count exit">{stats.cancelledCount}</div>
           <div className="report-pips exit">0.0 pips</div>
         </div>
       </div>
 
-      {/* Biểu đồ Equity Curve Pips SVG */}
+      {/* Equity Curve Pips SVG Chart */}
       {chartPoints.length > 1 && (
         <div className="chart-card">
-          <div className="chart-title">📈 BIỂU ĐỒ TĂNG TRƯỞNG LỢI NHUẬN (CUMULATIVE PIPS)</div>
+          <div className="chart-title">📈 PROFIT GROWTH (CUMULATIVE PIPS)</div>
           <div className="chart-svg-container">
             <svg viewBox="0 0 400 120" className="equity-svg">
               <defs>

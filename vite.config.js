@@ -5,4 +5,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: './', // Necessary for Electron to resolve local files
+  server: {
+    open: true
+  }
 })

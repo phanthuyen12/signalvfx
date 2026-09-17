@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import logoUrl from '/favicon.svg';
 
-// Format số an toàn không gây tràn
+// Format numeric values safely
 function formatPriceVal(val) {
   if (val === null || val === undefined || isNaN(val)) return '---';
   const num = typeof val === 'number' ? val : parseFloat(val);
@@ -19,12 +19,12 @@ function formatPipsVal(pips) {
 export default function SignalWidget({ signals }) {
   const [historyFilter, setHistoryFilter] = useState('ALL'); // 'ALL', 'TP', 'SL', 'CANCELLED'
 
-  // Tín hiệu mới nhất đang hoạt động
+  // Latest active signal
   const currentSignal = signals.length > 0 ? signals[0] : null;
-  // Danh sách lịch sử các lệnh trước đó
+  // Previous signals list
   const allPreviousSignals = useMemo(() => signals.slice(1), [signals]);
 
-  // Lọc lịch sử theo tab
+  // Filter history by tab
   const filteredPreviousSignals = useMemo(() => {
     return allPreviousSignals.filter(s => {
       if (historyFilter === 'ALL') return true;
@@ -35,7 +35,7 @@ export default function SignalWidget({ signals }) {
     });
   }, [allPreviousSignals, historyFilter]);
 
-  // Tính toán chi tiết Total Lợi Nhuận Hôm Nay
+  // Calculate today's performance stats
   const todayStats = useMemo(() => {
     let tpCount = 0;
     let slCount = 0;
@@ -62,7 +62,7 @@ export default function SignalWidget({ signals }) {
     const netPips = tpPips - slPips;
     const totalClosed = tpCount + slCount;
     const winRate = totalClosed > 0 ? ((tpCount / totalClosed) * 100).toFixed(1) : '0.0';
-    // Ước tính lợi nhuận USD (với Volume 0.10 lot standard = $1/pip trên XAUUSD)
+    // Est. USD profit (based on 0.10 standard lot = $1/pip on XAUUSD)
     const estUsd = (netPips * 1.0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     return {
@@ -84,8 +84,8 @@ export default function SignalWidget({ signals }) {
     return (
       <div className="empty-widget">
         <div className="empty-icon">📡</div>
-        <h3>Đang chờ tín hiệu mới từ Telegram...</h3>
-        <p>Hệ thống đang kết nối Socket SSE. Khi có tin nhắn trong nhóm, tín hiệu sẽ tự động hiển thị tại đây.</p>
+        <h3>Waiting for new signals from Telegram...</h3>
+        <p>Realtime SSE socket is active. Incoming group signals will automatically display here.</p>
       </div>
     );
   }
@@ -95,7 +95,7 @@ export default function SignalWidget({ signals }) {
   const isTp = currentSignal.status === 'TP_HIT' || (currentSignal.pips && currentSignal.pips > 0);
   const isCancelled = currentSignal.status === 'CANCELLED';
 
-  // Xác định theme thẻ Top
+  // Determine top card styling theme
   let cardThemeClass = 'theme-pending';
   let badgeText = 'PENDING';
   let badgeClass = 'status-pending';
@@ -123,7 +123,7 @@ export default function SignalWidget({ signals }) {
   return (
     <div className="widget-wrapper">
       {/* Header Bot Info */}
-      <div className="header">
+      {/* <div className="header">
         <div className="user-info">
           <img src={logoUrl} alt="FinAI Signals" className="avatar client-logo-avatar" />
           <div className="user-text-box">
@@ -136,7 +136,7 @@ export default function SignalWidget({ signals }) {
         <div className={badgeClass}>
           {badgeText}
         </div>
-      </div>
+      </div> */}
 
       {/* Main Signal Card Top */}
       <div className={`main-card-top ${cardThemeClass}`}>
@@ -231,15 +231,15 @@ export default function SignalWidget({ signals }) {
       </div>
 
       {/* ========================================================
-          THẺ TOTAL LỢI NHUẬN HÔM NAY (NỔI BẬT)
+          TODAY TOTAL PROFIT CARD (HERO)
           ======================================================== */}
       <div className="today-total-profit-card">
         <div className="total-profit-header">
           <div className="total-profit-title text-truncate">
-            <span>🏆 TOTAL LỢI NHUẬN HÔM NAY</span>
+            <span>🏆 TODAY TOTAL PROFIT</span>
             <span className="live-badge-mini">REALTIME</span>
           </div>
-          <div className="total-profit-date">{new Date().toLocaleDateString('vi-VN')}</div>
+          <div className="total-profit-date">{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
         </div>
 
         <div className="total-profit-hero">
@@ -248,7 +248,7 @@ export default function SignalWidget({ signals }) {
               {todayStats.isNetPositive ? `+${todayStats.netPips} pips` : `${todayStats.netPips} pips`}
             </div>
             <div className="total-profit-usd text-truncate">
-              Ước tính: <strong style={{ color: todayStats.isNetPositive ? '#34d399' : '#f87171' }}>
+              Estimated: <strong style={{ color: todayStats.isNetPositive ? '#34d399' : '#f87171' }}>
                 {todayStats.isNetPositive ? `+$${todayStats.estUsd}` : `-$${todayStats.estUsd.replace('-', '')}`}
               </strong> (Vol 0.10 lot)
             </div>
@@ -257,7 +257,7 @@ export default function SignalWidget({ signals }) {
           <div className="total-profit-winrate">
             <div className="winrate-circle">
               <span className="winrate-num">{todayStats.winRate}%</span>
-              <span className="winrate-lbl">WINRATE</span>
+              <span className="winrate-lbl">WIN RATE</span>
             </div>
           </div>
         </div>
@@ -276,20 +276,20 @@ export default function SignalWidget({ signals }) {
           </div>
         </div>
 
-        {/* 3 Thẻ thống kê chi tiết */}
+        {/* 3 Detail Stat Items */}
         <div className="report-grid" style={{ marginTop: '8px' }}>
           <div className="report-item">
-            <div className="report-label tp text-truncate">✓ CHỐT LỜI</div>
+            <div className="report-label tp text-truncate">✓ TAKE PROFIT</div>
             <div className="report-count tp text-truncate">{todayStats.tpCount}</div>
             <div className="report-pips tp text-truncate">+{todayStats.tpPips}p</div>
           </div>
           <div className="report-item">
-            <div className="report-label sl text-truncate">✗ CẮT LỖ</div>
+            <div className="report-label sl text-truncate">✗ STOP LOSS</div>
             <div className="report-count sl text-truncate">{todayStats.slCount}</div>
             <div className="report-pips sl text-truncate">-{todayStats.slPips}p</div>
           </div>
           <div className="report-item">
-            <div className="report-label exit text-truncate">⛔️ HỦY / VOID</div>
+            <div className="report-label exit text-truncate">⛔️ CANCELLED / VOID</div>
             <div className="report-count exit text-truncate">{todayStats.exitCount}</div>
             <div className="report-pips exit text-truncate">0.0p</div>
           </div>
@@ -297,16 +297,16 @@ export default function SignalWidget({ signals }) {
       </div>
 
       {/* ========================================================
-          NHẬT KÝ TÍN HIỆU GẦN ĐÂY (CUỘN SOCKET LỊCH SỬ)
+          RECENT SIGNALS LOG
           ======================================================== */}
       <div className="history-section-wrapper">
         <div className="section-title-bar">
           <div className="section-title text-truncate">
-            <span>⚡️ NHẬT KÝ TÍN HIỆU GẦN ĐÂY</span>
-            <span className="badge-count">{allPreviousSignals.length} lệnh</span>
+            <span>⚡️ RECENT SIGNALS LOG</span>
+            <span className="badge-count">{allPreviousSignals.length} orders</span>
           </div>
 
-          {/* Bộ lọc nhanh lịch sử */}
+          {/* Filter Chips */}
           <div className="history-filter-chips">
             {['ALL', 'TP', 'SL', 'CANCELLED'].map(f => (
               <button
@@ -314,17 +314,17 @@ export default function SignalWidget({ signals }) {
                 className={`filter-chip ${historyFilter === f ? 'active' : ''}`}
                 onClick={() => setHistoryFilter(f)}
               >
-                {f === 'ALL' ? 'Tất cả' : (f === 'TP' ? '✓ TP' : (f === 'SL' ? '✗ SL' : '⛔️ Hủy'))}
+                {f === 'ALL' ? 'All' : (f === 'TP' ? '✓ TP' : (f === 'SL' ? '✗ SL' : '⛔️ Void'))}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Danh sách cuộn lịch sử */}
+        {/* Scrollable History List */}
         <div className="history-scroll-box">
           {filteredPreviousSignals.length === 0 ? (
             <div className="history-empty">
-              Chưa có lệnh lịch sử nào phù hợp bộ lọc.
+              No historical signals match the selected filter.
             </div>
           ) : (
             filteredPreviousSignals.map(sig => {
@@ -343,13 +343,13 @@ export default function SignalWidget({ signals }) {
                 statusText = '✗ SL HIT';
                 statusClass = 'sl';
               } else if (sig.status === 'CANCELLED') {
-                statusText = '⛔️ HỦY';
+                statusText = '⛔️ VOID';
                 statusClass = 'exit';
               } else if (sig.status === 'ACTIVE') {
-                statusText = '⚡️ ĐÃ VÀO';
+                statusText = '⚡️ ENTERED';
                 statusClass = 'active';
               } else if (sig.status === 'PENDING') {
-                statusText = '⏳ CHỜ';
+                statusText = '⏳ PENDING';
                 statusClass = 'pending';
               }
 

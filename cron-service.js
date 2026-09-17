@@ -13,6 +13,7 @@ import https from 'https';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import localtunnel from 'localtunnel';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,7 +83,7 @@ const defaultConfig = {
   port: parseInt(process.env.PORT, 10) || 3001,
   host: process.env.HOST || '0.0.0.0',
   botToken: '',
-  targetBotUsername: 'Gannfinbot',
+  targetBotUsername: '', // Để trống để nhận từ TẤT CẢ thành viên & bot trong nhóm
   targetGroupName: 'thuyendev',
   chatId: '',
   adminPin: '8888',
@@ -449,11 +450,107 @@ function telegramApiRequest(botToken, method, params = {}) {
   });
 }
 
+let activeTunnel = null;
+let currentTunnelUrl = '';
+
+async function startAutoTunnel(botToken, targetPort = 3001) {
+  if (activeTunnel) {
+    try { activeTunnel.close(); } catch (e) {}
+    activeTunnel = null;
+  }
+
+  console.log(`[Auto Tunnel 🌐] Đang khởi tạo đường hầm HTTPS công khai cho cổng ${targetPort}...`);
+  activeTunnel = await localtunnel({ port: targetPort });
+  currentTunnelUrl = activeTunnel.url;
+  console.log(`[Auto Tunnel 🌐] ✅ Đã tạo đường hầm HTTPS: ${currentTunnelUrl}`);
+
+  activeTunnel.on('close', () => {
+    console.log('[Auto Tunnel 🌐] Đường hầm tunnel đã đóng.');
+    activeTunnel = null;
+    currentTunnelUrl = '';
+  });
+
+  activeTunnel.on('error', (err) => {
+    console.error('[Auto Tunnel Error]:', err.message);
+  });
+
+  if (botToken) {
+    const webhookUrl = `${currentTunnelUrl}/api/webhook`;
+    console.log(`[Telegram Webhook ⚡️] Đang tự động đăng ký Webhook với Telegram: ${webhookUrl}...`);
+    const setRes = await telegramApiRequest(botToken, 'setWebhook', {
+      url: webhookUrl,
+      drop_pending_updates: false,
+      allowed_updates: JSON.stringify(['message', 'channel_post', 'edited_message'])
+    });
+    console.log(`[Telegram Webhook ⚡️] ✅ Đăng ký Webhook tự động THÀNH CÔNG!`);
+    return { success: true, tunnelUrl: currentTunnelUrl, webhookUrl, telegram: setRes.result };
+  }
+
+  return { success: true, tunnelUrl: currentTunnelUrl };
+}
+
+async function stopAutoTunnel(botToken) {
+  if (activeTunnel) {
+    try { activeTunnel.close(); } catch (e) {}
+    activeTunnel = null;
+    currentTunnelUrl = '';
+    console.log('[Auto Tunnel 🌐] Đã dừng đường hầm HTTPS.');
+  }
+  if (botToken) {
+    await telegramApiRequest(botToken, 'deleteWebhook', { drop_pending_updates: false });
+    webhookClearedForToken = botToken;
+    console.log('[Telegram Webhook] ✅ Đã xóa Webhook trên Telegram để quay về Long-Polling.');
+  }
+  return { success: true, message: 'Đã đóng Tunnel và xóa Webhook thành công!' };
+}
+
 async function deleteWebhookIfNeeded(botToken) {
   if (!botToken || webhookClearedForToken === botToken) return;
   await telegramApiRequest(botToken, 'deleteWebhook', { drop_pending_updates: false });
   webhookClearedForToken = botToken;
   console.log('[Telegram Engine] ✅ Đã tắt webhook để dùng getUpdates polling');
+}
+
+// Bộ đệm lưu trữ tin nhắn nhận được gần nhất trong bộ nhớ (cả từ Webhook lẫn Polling)
+const recentReceivedMessages = [];
+
+function recordReceivedMessage(source, msg) {
+  if (!msg) return;
+  const textContent = msg.text || msg.caption || '';
+  const updateChatId = String(msg.chat?.id || '');
+  const chatTitle = msg.chat?.title || msg.chat?.username || msg.chat?.first_name || 'Chat ' + updateChatId;
+  const chatType = msg.chat?.type || 'unknown';
+  const senderUsername = (msg.from?.username || '').toLowerCase();
+  const senderName = msg.from?.first_name || msg.from?.username || (chatType === 'channel' ? 'Channel Admin' : 'Unknown');
+
+  const config = loadConfig();
+  const isChatIdMatched = !config.chatId || updateChatId === String(config.chatId).trim();
+  const targetBot = (config.targetBotUsername || '').toLowerCase().replace('@', '');
+  const isSenderMatched = !targetBot ||
+    senderUsername.includes(targetBot) ||
+    senderName.toLowerCase().includes(targetBot) ||
+    chatType === 'channel';
+
+  const testParse = textContent ? splitMessages(textContent).map(parseTelegramMessage).filter(Boolean) : [];
+
+  const item = {
+    source, // 'webhook' hoặc 'polling'
+    date: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
+    chatId: updateChatId,
+    chatTitle,
+    chatType,
+    senderName,
+    senderUsername,
+    text: textContent,
+    isChatIdMatched,
+    isSenderMatched,
+    canParse: testParse.length > 0,
+    parsedCount: testParse.length,
+    parsedPreview: testParse[0] || null
+  };
+
+  recentReceivedMessages.unshift(item);
+  if (recentReceivedMessages.length > 50) recentReceivedMessages.pop();
 }
 
 function fetchTelegramUpdates(botToken) {
@@ -479,6 +576,7 @@ function fetchTelegramUpdates(botToken) {
               }
               const msg = upd.message || upd.channel_post || upd.edited_message;
               if (msg) {
+                recordReceivedMessage('polling', msg);
                 const textContent = msg.text || msg.caption || '';
                 const updateChatId = String(msg.chat?.id || '');
                 const chatTitle = msg.chat?.title || msg.chat?.username || msg.chat?.first_name || 'Private';
@@ -494,25 +592,15 @@ function fetchTelegramUpdates(botToken) {
                   continue;
                 }
 
-                // Kiểm tra điều kiện lọc sender / nội dung
-                const targetBot = (config.targetBotUsername || '').toLowerCase().replace('@', '');
-                const matchSender = !targetBot ||
-                  senderUsername.includes(targetBot) ||
-                  senderName.toLowerCase().includes(targetBot) ||
-                  isChannel;
-
-                const matchKeywords = /Gann|FinAI|TÍN HIỆU|BUY|SELL|TP HIT|SL HIT|HỦY LỆNH|ĐÃ VÀO LỆNH|XAUUSD|Entry|Cắt lỗ/i.test(textContent);
-
                 console.log(`[Telegram Realtime ⚡️] 📩 Nhận tin từ: @${senderUsername || senderName} [${chatTitle} | ID: ${updateChatId}]: ${textContent.slice(0, 50)}...`);
 
-                if (matchSender || matchKeywords) {
-                  const added = parseAndStoreMessages(textContent);
-                  if (added.length > 0) {
-                    console.log(`[Parser 🚀] ✅ Đã bóc tách & bắn Realtime ${added.length} lệnh xuống Website/App!`);
-                    items.push({ text: textContent, added, from: senderUsername, chat: chatTitle, chatId: updateChatId });
-                  } else {
-                    console.log(`[Telegram Realtime ℹ️] Tin nhắn không khớp cấu trúc bóc tách tín hiệu.`);
-                  }
+                // Nhận & bóc tách TẤT CẢ tín hiệu từ mọi user / bot trong nhóm
+                const added = parseAndStoreMessages(textContent);
+                if (added.length > 0) {
+                  console.log(`[Parser 🚀] ✅ Đã bóc tách & bắn Realtime ${added.length} lệnh từ @${senderUsername || senderName} xuống Website/App!`);
+                  items.push({ text: textContent, added, from: senderUsername || senderName, chat: chatTitle, chatId: updateChatId });
+                } else {
+                  console.log(`[Telegram Realtime ℹ️] Tin nhắn từ @${senderUsername || senderName} không chứa cấu trúc lệnh Forex/FinAI.`);
                 }
               }
             }
@@ -1094,7 +1182,195 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 11b. API Đăng Ký Webhook Telegram (/api/admin/bot/set-webhook)
+  if (url.pathname === '/api/admin/bot/set-webhook' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        const config = loadConfig();
+        const token = payload.botToken || config.botToken;
+        const webhookUrl = payload.url;
+
+        if (!token) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Chưa có Bot Token!' }));
+          return;
+        }
+        if (!webhookUrl || !webhookUrl.startsWith('https://')) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Webhook URL phải bắt đầu bằng https:// (yêu cầu của Telegram)' }));
+          return;
+        }
+
+        const result = await telegramApiRequest(token, 'setWebhook', {
+          url: webhookUrl,
+          allowed_updates: JSON.stringify(['message', 'channel_post', 'edited_message'])
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: true, message: 'Đăng ký Webhook thành công!', result: result.result }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 11d. API Tự Động Tạo HTTPS Tunnel & Đăng Ký Webhook (/api/admin/bot/auto-tunnel)
+  if (url.pathname === '/api/admin/bot/auto-tunnel' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        const config = loadConfig();
+        const token = payload.botToken || config.botToken;
+        const port = config.port || 3001;
+
+        if (!token) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Chưa có Bot Token. Vui lòng nhập Bot Token!' }));
+          return;
+        }
+
+        const tunnelData = await startAutoTunnel(token, port);
+        const updatedConfig = { ...config, webhookUrl: tunnelData.webhookUrl };
+        saveConfig(updatedConfig);
+
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          success: true,
+          tunnelUrl: tunnelData.tunnelUrl,
+          webhookUrl: tunnelData.webhookUrl,
+          message: `⚡️ Đã tạo đường hầm HTTPS (${tunnelData.tunnelUrl}) và tự động đăng ký Webhook Telegram thành công!`
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 11e. API Dừng HTTPS Tunnel (/api/admin/bot/stop-tunnel)
+  if (url.pathname === '/api/admin/bot/stop-tunnel' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        const config = loadConfig();
+        const token = payload.botToken || config.botToken;
+
+        const stopData = await stopAutoTunnel(token);
+        const updatedConfig = { ...config, webhookUrl: '' };
+        saveConfig(updatedConfig);
+
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: true, message: stopData.message }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 11f. API Kiểm Tra Trạng Thái Tunnel (/api/admin/bot/tunnel-status)
+  if (url.pathname === '/api/admin/bot/tunnel-status' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      active: Boolean(activeTunnel),
+      tunnelUrl: currentTunnelUrl,
+      webhookUrl: currentTunnelUrl ? `${currentTunnelUrl}/api/webhook` : ''
+    }));
+  }
+
+  // 11c. Webhook Receiver Endpoint (/api/webhook hoặc /api/telegram/webhook)
+  if ((url.pathname === '/api/webhook' || url.pathname === '/api/telegram/webhook') && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const upd = JSON.parse(body || '{}');
+        const msg = upd.message || upd.channel_post || upd.edited_message;
+        if (msg) {
+          recordReceivedMessage('webhook', msg);
+          const textContent = msg.text || msg.caption || '';
+          if (textContent.trim()) {
+            console.log(`[Telegram Webhook ⚡️] Nhận tin: ${textContent.slice(0, 50)}...`);
+            parseAndStoreMessages(textContent);
+          }
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, error: err.message }));
+      }
+    });
+    return;
+  }
+
   // 12. API Soi Updates Telegram Mới Nhất (/api/admin/bot/inspect-updates)
+  // 12b. API 1-Click Tự Động Sửa Lỗi & Reset Xung Đột (/api/admin/bot/auto-fix)
+  if (url.pathname === '/api/admin/bot/auto-fix' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const payload = body ? JSON.parse(body) : {};
+        const config = loadConfig();
+        const token = payload.botToken || config.botToken;
+
+        if (!token) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Chưa có Bot Token. Vui lòng nhập Bot Token!' }));
+          return;
+        }
+
+        console.log('[Auto-Fix 🛠] Đang thực hiện 1-Click sửa lỗi & reset Telegram Bot...');
+        // 1. Dừng tunnel nếu có
+        await stopAutoTunnel(token).catch(() => {});
+
+        // 2. Xóa Webhook và xóa sạch tin đọng trên Telegram (drop_pending_updates: true)
+        const delRes = await telegramApiRequest(token, 'deleteWebhook', { drop_pending_updates: true }).catch(err => ({ error: err.message }));
+        webhookClearedForToken = token;
+
+        // 3. Reset ID update
+        lastUpdateId = 0;
+
+        // 4. Kiểm tra danh tính Bot (getMe)
+        const meRes = await telegramApiRequest(token, 'getMe').catch(() => null);
+
+        // 5. Cập nhật cấu hình & kích hoạt Polling sạch
+        config.enableCron = true;
+        config.webhookUrl = '';
+        saveConfig(config);
+
+        if (!isPollerRunning) {
+          startContinuousTelegramPoller();
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          success: true,
+          message: '✅ Đã sửa lỗi xung đột, xóa webhook kẹt và khởi động lại kết nối bot thành công!',
+          bot: meRes?.result || null,
+          webhookDeleted: delRes?.result || true
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // 12. API Soi getUpdates Trực Tiếp Từ Telegram (/api/admin/bot/inspect-updates)
   if (url.pathname === '/api/admin/bot/inspect-updates' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => body += chunk);
@@ -1110,64 +1386,134 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        // Gọi getUpdates với timeout ngắn để soi các tin nhắn gần đây
-        const rawRes = await telegramApiRequest(token, 'getUpdates', {
-          limit: payload.limit || 15,
-          timeout: 2,
-          allowed_updates: JSON.stringify(['message', 'channel_post', 'edited_message'])
-        });
+        // Ưu tiên 1: Nếu trong cache đã có tin nhắn vừa bắt được (cả Webhook lẫn Polling), trả về ngay không cần gọi getUpdates để tránh conflict
+        if (recentReceivedMessages.length > 0) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            isWebhookActive: Boolean(activeTunnel) || Boolean(config.webhookUrl),
+            total: recentReceivedMessages.length,
+            items: recentReceivedMessages,
+            source: 'cache',
+            currentConfig: {
+              chatId: config.chatId,
+              targetBotUsername: config.targetBotUsername,
+              enableCron: config.enableCron
+            }
+          }));
+          return;
+        }
 
-        const updates = rawRes.result || [];
-        const inspected = updates.map(upd => {
-          const msg = upd.message || upd.channel_post || upd.edited_message;
-          if (!msg) return null;
+        // Ưu tiên 2: Nếu cache trống và Poller đang chạy ngầm, không gọi getUpdates song song để tránh Conflict lỗi 'terminated by other getUpdates request'
+        if (isPollerRunning && config.enableCron) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            isWebhookActive: false,
+            total: 0,
+            items: [],
+            message: 'Engine đang lắng nghe tin nhắn trực tiếp. Hãy gửi 1 tin vào nhóm/kênh rồi bấm Soi lại.',
+            currentConfig: {
+              chatId: config.chatId,
+              targetBotUsername: config.targetBotUsername,
+              enableCron: config.enableCron
+            }
+          }));
+          return;
+        }
 
-          const textContent = msg.text || msg.caption || '';
-          const updateChatId = String(msg.chat?.id || '');
-          const chatTitle = msg.chat?.title || msg.chat?.username || msg.chat?.first_name || 'Chat ' + updateChatId;
-          const chatType = msg.chat?.type || 'unknown';
-          const senderUsername = (msg.from?.username || '').toLowerCase();
-          const senderName = msg.from?.first_name || msg.from?.username || (chatType === 'channel' ? 'Channel Admin' : 'Unknown');
+        try {
+          // Thử gọi getUpdates từ Telegram API khi Poller chưa chạy
+          const rawRes = await telegramApiRequest(token, 'getUpdates', {
+            limit: payload.limit || 15,
+            timeout: 1,
+            allowed_updates: JSON.stringify(['message', 'channel_post', 'edited_message'])
+          });
 
-          // Phân tích điều kiện lọc
-          const isChatIdMatched = !config.chatId || updateChatId === String(config.chatId).trim();
-          const targetBot = (config.targetBotUsername || '').toLowerCase().replace('@', '');
-          const isSenderMatched = !targetBot ||
-            senderUsername.includes(targetBot) ||
-            senderName.toLowerCase().includes(targetBot) ||
-            chatType === 'channel';
+          const updates = rawRes.result || [];
+          const inspected = updates.map(upd => {
+            const msg = upd.message || upd.channel_post || upd.edited_message;
+            if (!msg) return null;
 
-          // Phân tích cú pháp xem có nhận ra tín hiệu không
-          const testParse = textContent ? splitMessages(textContent).map(parseTelegramMessage).filter(Boolean) : [];
+            const textContent = msg.text || msg.caption || '';
+            const updateChatId = String(msg.chat?.id || '');
+            const chatTitle = msg.chat?.title || msg.chat?.username || msg.chat?.first_name || 'Chat ' + updateChatId;
+            const chatType = msg.chat?.type || 'unknown';
+            const senderUsername = (msg.from?.username || '').toLowerCase();
+            const senderName = msg.from?.first_name || msg.from?.username || (chatType === 'channel' ? 'Channel Admin' : 'Unknown');
 
-          return {
-            updateId: upd.update_id,
-            date: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
-            chatId: updateChatId,
-            chatTitle,
-            chatType,
-            senderName,
-            senderUsername,
-            text: textContent,
-            isChatIdMatched,
-            isSenderMatched,
-            canParse: testParse.length > 0,
-            parsedCount: testParse.length,
-            parsedPreview: testParse[0] || null
-          };
-        }).filter(Boolean);
+            const isChatIdMatched = !config.chatId || updateChatId === String(config.chatId).trim();
+            const targetBot = (config.targetBotUsername || '').toLowerCase().replace('@', '');
+            const isSenderMatched = !targetBot ||
+              senderUsername.includes(targetBot) ||
+              senderName.toLowerCase().includes(targetBot) ||
+              chatType === 'channel';
 
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({
-          success: true,
-          total: updates.length,
-          items: inspected,
-          currentConfig: {
-            chatId: config.chatId,
-            targetBotUsername: config.targetBotUsername,
-            enableCron: config.enableCron
+            const testParse = textContent ? splitMessages(textContent).map(parseTelegramMessage).filter(Boolean) : [];
+
+            return {
+              updateId: upd.update_id,
+              source: 'polling',
+              date: msg.date ? new Date(msg.date * 1000).toISOString() : new Date().toISOString(),
+              chatId: updateChatId,
+              chatTitle,
+              chatType,
+              senderName,
+              senderUsername,
+              text: textContent,
+              isChatIdMatched,
+              isSenderMatched,
+              canParse: testParse.length > 0,
+              parsedCount: testParse.length,
+              parsedPreview: testParse[0] || null
+            };
+          }).filter(Boolean);
+
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({
+            success: true,
+            isWebhookActive: false,
+            total: updates.length,
+            items: inspected,
+            currentConfig: {
+              chatId: config.chatId,
+              targetBotUsername: config.targetBotUsername,
+              enableCron: config.enableCron
+            }
+          }));
+        } catch (apiErr) {
+          // Xử lý xung đột khi Webhook đang bật
+          if (apiErr.message && apiErr.message.includes('webhook is active')) {
+            const webhookInfoRes = await telegramApiRequest(token, 'getWebhookInfo').catch(() => null);
+            const webhookInfo = webhookInfoRes ? webhookInfoRes.result : null;
+
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              success: true,
+              isWebhookActive: true,
+              webhookInfo: webhookInfo,
+              total: recentReceivedMessages.length,
+              items: recentReceivedMessages,
+              message: 'Bot đang ở chế độ Webhook (Telegram cấm getUpdates và tự động bắn tin trực tiếp về Webhook).'
+            }));
+            return;
           }
-        }));
+
+          // Xử lý lỗi Conflict do bot instance khác
+          if (apiErr.message && (apiErr.message.includes('terminated by other getUpdates') || apiErr.message.includes('Conflict'))) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({
+              success: true,
+              hasConflict: true,
+              total: recentReceivedMessages.length,
+              items: recentReceivedMessages,
+              message: 'Đang có tiến trình Telegram khác hoạt động. Đang hiển thị tin từ bộ nhớ cache.'
+            }));
+            return;
+          }
+
+          throw apiErr;
+        }
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: err.message }));
