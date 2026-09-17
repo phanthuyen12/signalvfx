@@ -1287,6 +1287,7 @@ const server = http.createServer((req, res) => {
       tunnelUrl: currentTunnelUrl,
       webhookUrl: currentTunnelUrl ? `${currentTunnelUrl}/api/webhook` : ''
     }));
+    return;
   }
 
   // 11c. Webhook Receiver Endpoint (/api/webhook hoặc /api/telegram/webhook)
