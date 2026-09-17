@@ -89,6 +89,7 @@ export default function AdminPanel({ signals, onDataChange }) {
   const [successMsg, setSuccessMsg] = useState('');
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [filterStatus, setFilterStatus] = useState('ALL');
+  const [clearAllLoading, setClearAllLoading] = useState(false);
   
   // Bot Config State
   const [botConfig, setBotConfig] = useState(getBotConfig());
@@ -704,11 +705,23 @@ export default function AdminPanel({ signals, onDataChange }) {
   };
 
   // Xóa tất cả
-  const handleClearAll = () => {
-    if (window.confirm('CẢNH BÁO: Bạn có chắc muốn xóa TOÀN BỘ dữ liệu JSON hiện tại?')) {
+  const handleClearAll = async () => {
+    if (!window.confirm('CẢNH BÁO: Xóa TOÀN BỘ dữ liệu tín hiệu? Thao tác này không thể hoàn tác.')) {
+      return;
+    }
+
+    setClearAllLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/signals/clear`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Backend trả về mã ${response.status}`);
+
       clearAllSignals();
-      showFeedback('🗑️ Đã làm sạch toàn bộ dữ liệu!');
-      if (onDataChange) onDataChange();
+      showFeedback('🗑️ Đã xóa toàn bộ dữ liệu trên backend và thiết bị này!');
+      if (onDataChange) await onDataChange();
+    } catch (error) {
+      alert(`Không thể xóa dữ liệu: ${error.message}. Hãy kiểm tra backend cổng 3001.`);
+    } finally {
+      setClearAllLoading(false);
     }
   };
 
@@ -805,6 +818,13 @@ export default function AdminPanel({ signals, onDataChange }) {
           </label>
           <button className="btn-danger-outline" onClick={handleResetDefault}>
             🔄 Reset Sample Data
+          </button>
+          <button
+            className="btn-danger-action"
+            onClick={handleClearAll}
+            disabled={clearAllLoading || signals.length === 0}
+          >
+            {clearAllLoading ? 'Đang xóa...' : `🗑 Xóa toàn bộ (${signals.length})`}
           </button>
         </div>
       </div>
@@ -923,8 +943,12 @@ export default function AdminPanel({ signals, onDataChange }) {
               ))}
             </div>
 
-            <button className="btn-danger-sm" onClick={handleClearAll}>
-              🗑 Clear All ({signals.length})
+            <button
+              className="btn-danger-sm"
+              onClick={handleClearAll}
+              disabled={clearAllLoading || signals.length === 0}
+            >
+              {clearAllLoading ? 'Đang xóa...' : `🗑 Clear All (${signals.length})`}
             </button>
           </div>
 
