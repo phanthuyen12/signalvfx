@@ -167,22 +167,22 @@ function App() {
         </span>
       </button>
 
-      <nav className="app-mode-switch" aria-label="Mode Switch">
-        {!isElectron && (
+      {!isElectron && (
+        <nav className="app-mode-switch" aria-label="Mode Switch">
           <button
             className={`app-mode-btn ${isAdminRoute ? 'active' : ''}`}
             onClick={() => navigateTo('/admin')}
           >
             Admin Portal
           </button>
-        )}
-        <button
-          className={`app-mode-btn ${!isAdminRoute ? 'active' : ''}`}
-          onClick={() => navigateTo('/live')}
-        >
-          Live Signals
-        </button>
-      </nav>
+          <button
+            className={`app-mode-btn ${!isAdminRoute ? 'active' : ''}`}
+            onClick={() => navigateTo('/live')}
+          >
+            Live Signals
+          </button>
+        </nav>
+      )}
 
       <div className="app-header-status">
         <span className="status-live-indicator">

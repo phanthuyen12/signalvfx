@@ -2059,6 +2059,14 @@ body::after {
 }
 
 @media (max-width: 560px) {
+    .finai-app-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .app-mode-switch {
+        display: none;
+    }
+
     .admin-portal-wrapper,
     .admin-login-screen {
         min-height: calc(100dvh - 16px);
